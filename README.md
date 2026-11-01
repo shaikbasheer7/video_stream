@@ -1,0 +1,236 @@
+# Streaming platform (MVP)
+
+Upload videos, encode them to 480p/720p/1080p HLS, and stream them with adaptive bitrate.
+Built phase by phase from the *Video Streaming Platform – MVP Blueprint*.
+
+**Status:**
+- **Phase 1 (foundation), done:** Docker stack, Django + JWT auth, React + Redux Saga shell, CI.
+- **Phase 2 (upload), done:** direct-to-S3 uploads (single or multipart) with progress and cancel, and a `video.uploaded` event on Kafka.
+- **Phase 3 (encoding), done:** an FFmpeg worker encodes HLS 480p/720p/1080p plus a thumbnail, with retries and a DLQ; a status consumer updates the database; the UI polls until a video is ready.
+- **Phase 4 (playback), done:** CDN delivery with CloudFront signed cookies, an hls.js player with automatic and manual quality, public browse and watch pages, and Terraform for S3 and CloudFront.
+- **Phase 5 (subscribers and events), done:** playback events through Kafka into MongoDB, resume where you left off, in-app notifications, and follows with a Following feed.
+
+## Quick start
+
+Requires Docker Desktop. Node and FFmpeg don't need to be installed locally.
+
+```sh
+cp .env.example .env          # then set DJANGO_SECRET_KEY to a long random string
+docker compose up -d --build
+```
+
+Open http://localhost:8080 and register an account.
+
+Create an admin user for http://localhost:8080/admin/:
+
+```sh
+docker compose exec django python manage.py createsuperuser
+```
+
+## Services
+
+| Service    | Port (host)  | Notes                                                              |
+|------------|--------------|--------------------------------------------------------------------|
+| nginx      | 8080         | Serves the React build, proxies `/api`, `/admin`, `/static`; rate limits auth |
+| django     | (internal)   | Gunicorn; runs migrations on start                                 |
+| postgres   | 5432         | Users now; videos and renditions from Phase 2                      |
+| kafka      | 29092        | KRaft, single node. Inside Docker use `kafka:9092`                 |
+| s3         | 8333         | SeaweedFS S3 API (local stand-in for AWS S3)                       |
+| cdn        | (via nginx `/cdn/`) | Local stand-in for CloudFront: checks signed cookies, only reader of the bucket |
+| mongo      | 27017        | Playback events, watch progress, notifications, feeds              |
+| encoder    | (none)       | FFmpeg worker (group `encoder`), limited to 2 CPUs. `--scale encoder=N` |
+| status-consumer    | (none) | `run_consumer status`: video.ready/failed → Video rows (group `api-status`) |
+| analytics-consumer | (none) | `run_consumer analytics`: events.playback → MongoDB (group `analytics`) |
+| notify-consumer    | (none) | `run_consumer notify`: video.ready/failed → notifications (group `notify`) |
+| feed-consumer      | (none) | `run_consumer feed`: video.ready → followers' feeds (group `feed`)  |
+
+## Layout
+
+```
+backend/    Django project: config/ (split settings), accounts/ (User + JWT auth), common/
+frontend/   React + TypeScript + Vite: app/ (store, saga, axios client), features/auth, features/videos
+infra/      nginx config (later: AWS / IaC)
+worker/     FFmpeg encoding worker (Phase 3)
+data/       Airflow DAGs, notebooks (Phase 7+)
+```
+
+## Auth design
+
+- `POST /api/auth/login/` returns a 15-minute **access token** in the body and sets a 7-day **refresh token**
+  as an `httpOnly`, `SameSite=Lax` cookie scoped to `/api/auth/`.
+- The React app keeps the access token in Redux memory only. On load it calls `/api/auth/refresh/`
+  to restore the session from the cookie.
+- On a 401 the axios interceptor refreshes once and retries. Parallel 401s share one refresh request.
+- Refresh tokens rotate on every use and the old one is blacklisted. Logout blacklists the current token.
+- The Django admin uses normal session auth.
+
+## Upload flow
+
+1. `POST /api/videos/` (title, filename, size, content_type) creates a `Video` (`uploading`) and returns either
+   one presigned PUT URL (≤ 100 MB) or presigned URLs for each 16 MB part of an S3 multipart upload.
+2. The browser PUTs the bytes **straight to S3**. Django never sees them. Each part's `ETag` is collected
+   (the bucket CORS rule exposes it).
+3. `POST /api/videos/{id}/complete/` (with `parts` for multipart) assembles the multipart upload, checks the object
+   with a HEAD request (it must exist with the declared size), sets status `uploaded` and publishes `video.uploaded`
+   keyed by `video_id`. If publishing fails, the status change rolls back and the call can be retried.
+   Retrying after success changes nothing.
+4. Cancel calls `DELETE /api/videos/{id}/`, which aborts the multipart upload and removes the raw object.
+
+Other endpoints: `GET /api/videos/` returns ready videos (`?mine=true` returns your own in any status) and
+`GET /api/videos/{id}/` returns one video.
+
+On startup the django container runs `manage.py ensure_infra`, which creates the bucket (with CORS and lifecycle
+rules) and the Kafka topics `video.uploaded`, `video.ready`, `video.failed`, `video.uploaded.dlq` and
+`events.playback` (6 partitions each). Read the topic:
+
+```sh
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --topic video.uploaded --from-beginning --property print.key=true
+```
+
+## Encoding pipeline
+
+```
+video.uploaded ──> encoder ──> S3 hls/{id}/master.m3u8, {480p,720p,1080p}/index.m3u8 + seg_NNN.ts
+                      │        S3 thumbnails/{id}/default.jpg
+                      ├──> video.ready  ──> status-consumer ──> Video = ready, Rendition rows
+                      └──> video.failed ──> status-consumer ──> Video = failed (+ error_message)
+                           video.uploaded.dlq  (original message + error, for inspection)
+```
+
+- **Ladder:** only renditions the source can fill. A 720p source gets 480p and 720p. Portrait sources get
+  portrait renditions. Sources below 480p get one rendition at their own size. Keyframes every 2 s with
+  6 s segments, so all renditions cut at the same points and the player can switch cleanly.
+- **Claiming:** the worker's only DB write is `status = processing` together with the message's `event_id`.
+  A redelivery of the same message (after a crash) takes the video back over; a duplicate message is skipped.
+  `ready` and `failed` are written only by the status consumer.
+- **Ordering:** `/complete` commits `uploaded` before publishing, so the encoder never sees an event before
+  the row is in the right state.
+- **Failures:** up to 3 attempts with backoff (5 s, 15 s). An unusable file (not a video, or over
+  `MAX_VIDEO_DURATION_SEC`, 2 h by default) fails at once with a user-facing reason. After that the worker
+  publishes `video.failed`, sends the message to the DLQ and commits. Temp files are always removed.
+- **Long encodes:** the worker pauses its partitions and keeps polling while FFmpeg runs in a background
+  thread, so Kafka never times it out of the consumer group (`max.poll.interval.ms`).
+- **Deleting** a video removes its raw upload, HLS output and thumbnail. If it's mid-encode, the worker
+  cleans up its own output once it finishes.
+
+Inspect the DLQ:
+
+```sh
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --topic video.uploaded.dlq --from-beginning
+```
+
+## Playback
+
+- **Public pages:** `/` (browse) and `/watch/:id` are public. `/my` and `/upload` need an account.
+- **Signed cookies:** `GET /api/videos/{id}/` for a ready video returns `playback.hls_url` and sets three
+  CloudFront signed cookies (`CloudFront-Policy`, `-Signature`, `-Key-Pair-Id`).
+  - The policy covers `<CDN_BASE_URL>/hls/<id>/*` only, the cookie path matches it, and the cookies are
+    `HttpOnly`.
+  - They last for the video's duration plus 2 hours (at most 12 hours).
+  - Cookies are used instead of signed URLs because one video means hundreds of segment requests.
+- **Player:** hls.js chooses the quality from measured bandwidth, and the viewer can pick one by hand.
+  Safari and iOS play HLS natively (the browser picks the quality).
+  - If the CDN answers 403 (cookies expired), the player re-fetches the video for fresh cookies and
+    carries on from the same position.
+- **CDN rules** (CloudFront in AWS, `infra/local-cdn` locally; the same rules in both):
+
+  | Path            | Access |
+  |-----------------|--------|
+  | `/hls/*`        | Signed cookies required. Segments cached for 1 year, playlists for 60 s. |
+  | `/thumbnails/*` | Public |
+  | anything else   | Denied. The bucket policy lets CloudFront read only `hls/` and `thumbnails/`. |
+
+- **Local signing key:** generated on first start into the `cdn-keys` Docker volume.
+- **AWS:** `infra/terraform/media` creates the private bucket (CORS, lifecycle, encryption), Origin Access
+  Control, the bucket policy, the public key and key group, the cache and CORS policies, and the
+  distribution. Then set `CDN_BASE_URL`, `CLOUDFRONT_KEY_PAIR_ID`, `CLOUDFRONT_PRIVATE_KEY` (from Secrets
+  Manager) and `CDN_COOKIE_DOMAIN`.
+  - The CDN must run on a subdomain of the app's domain (for example `media.example.com` with
+    `CDN_COOKIE_DOMAIN=.example.com`). Otherwise the browser won't send the API's cookies to it.
+
+## Events and subscribers
+
+```
+player ─(PlaybackTracker)─> eventsSaga ─> POST /api/events/batch/ ─> events.playback (key: video_id)
+                                                                          └─> analytics-consumer ─> MongoDB
+video.ready / video.failed ─> notify-consumer ─> notifications (MongoDB) ─> bell (polled every 30 s)
+video.ready ───────────────> feed-consumer ───> feed_items (MongoDB, fan-out to followers) ─> /following
+```
+
+- **Tracked events:** play, pause, seek (from/to), progress (every 10 s of playback), quality_change
+  (from/to, auto or manual), buffering (stall duration) and complete (at 95%, with seconds actually watched).
+  Each event carries `session_id`, the user (or an anonymous browser id), the quality, a client timestamp,
+  and the device and country added by the server.
+- **Batching:** the saga sends events every 15 s or once 50 are waiting. When the page is hidden or
+  closed, it sends the rest with `fetch(..., {keepalive: true})`, which unlike `sendBeacon` can carry the
+  `Authorization` header (`sendBeacon` is the fallback). That final batch goes to `?final=1`, so an
+  access token that has just expired doesn't lose the events: they're recorded anonymously.
+- **Intake:** validates and publishes in one Kafka flush. It never writes a database in the request path.
+- **MongoDB:**
+  - `playback_events`: one document per `event_id` (so redelivery is harmless), deleted after 90 days
+    by a TTL index.
+  - `watch_progress`: one row per user and video, which only ever moves forward in time, so late or
+    replayed events can't move it back.
+  - `notifications` and `feed_items`: one per event and one per (user, video) respectively, so neither
+    duplicates on replay.
+- **Resume:** for a logged-in viewer, `GET /api/videos/{id}/` returns `resume_position_sec`. It's left
+  out if the video was finished or the position is within 5 s of the start or 10 s of the end. The player
+  starts there and shows "Resuming from m:ss · Start over".
+- **Follows:** `POST|DELETE /api/users/{id}/follow/` and `GET /api/feed/`. Notifications:
+  `GET /api/notifications/` and `POST /api/notifications/read/`.
+
+## Development
+
+Backend tests and lint (no local Python setup needed):
+
+```sh
+docker run --rm -v "$PWD/backend:/app" -w /app python:3.12-slim \
+  sh -c "pip install -q -r requirements-dev.txt && ruff check . && pytest -q"
+```
+
+Worker tests (real FFmpeg; the claim tests also need the running Postgres):
+
+```sh
+docker build --target base -t streaming-worker-test ./worker
+docker run --rm --network youtube_default -e POSTGRES_HOST=postgres -e POSTGRES_PASSWORD=<from .env> \
+  -v "$PWD/worker:/app" -w /app streaming-worker-test \
+  sh -c "pip install -q -r requirements-dev.txt && ruff check . && pytest -q"
+```
+
+Frontend checks:
+
+```sh
+docker run --rm -v "$PWD/frontend:/app" -w /app node:22-alpine \
+  sh -c "npm ci && npm run lint && npm run typecheck && npm test"
+```
+
+With Node installed locally, `cd frontend && npm install && npm run dev` gives hot reload on
+http://localhost:5173. It proxies `/api` to the Docker stack on :8080.
+
+CI (`.github/workflows/ci.yml`) runs ruff, a migrations check and pytest against Postgres, ESLint, tsc and
+Vitest, then builds both Docker images.
+
+## Deviations from the blueprint
+
+- **No MongoDB yet** (lean MVP). PostgreSQL only until Phase 5 (subscribers and events).
+- **SeaweedFS instead of MinIO** for local S3. MinIO no longer publishes community Docker images.
+  Both speak the S3 API, so boto3 code is the same. SeaweedFS ignores bucket lifecycle rules, which
+  only take effect on real S3.
+- **Multipart part URLs last 2 hours** (single-PUT URLs last 15 minutes), so large uploads on slow
+  connections don't expire partway through.
+
+- **The encoder skips duplicates instead of every `processing` video.** Skipping all `processing` videos
+  would leave a video stuck forever after a worker crash. The `event_id` check handles both cases.
+- **CloudFront runs locally as a small Python stand-in** (`infra/local-cdn`) that checks the same signed
+  cookies. nginx can't verify RSA signatures. It checks cookies independently of Django's signer, so each
+  tests the other.
+
+- **`keepalive` fetch instead of `sendBeacon`** for the final flush (see above). `sendBeacon` remains the
+  fallback.
+
+## Next: Phase 6 (hardening and deployment)
+
+More tests, structured logging, Sentry, consumer-lag monitoring, the security checklist, AWS provisioning
+(EC2, RDS, MongoDB Atlas, MSK, ECR) and a CI/CD pipeline through staging to production.

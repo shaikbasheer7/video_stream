@@ -1,0 +1,101 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import { useAppDispatch, useAppSelector } from '../../app/store';
+import { formatDuration } from '../videos/format';
+import { followRequested, videoRequested } from '../videos/videosSlice';
+import HlsPlayer from './HlsPlayer';
+import QualityMenu from './QualityMenu';
+
+export default function PlayerPage() {
+  const { id = '' } = useParams();
+  const dispatch = useAppDispatch();
+  const { current: video, currentLoading, currentError } = useAppSelector((s) => s.videos);
+  const authStatus = useAppSelector((s) => s.auth.status);
+  const loggedIn = authStatus === 'authenticated';
+  const authSettled = authStatus === 'authenticated' || authStatus === 'anonymous';
+  const playerError = useAppSelector((s) => s.player.error);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const start = useRef<{ id: string; at: number | null } | null>(null);
+  const [resumeHidden, setResumeHidden] = useState(false);
+  const renewAccess = useCallback(() => dispatch(videoRequested(id)), [dispatch, id]);
+
+  // Wait until we know who's watching: logged-in viewers get their resume position and follow state.
+  useEffect(() => {
+    if (!authSettled) return;
+    dispatch(videoRequested(id));
+    setResumeHidden(false);
+  }, [dispatch, id, authSettled, loggedIn]);
+
+  if (currentError) {
+    return (
+      <section className="card empty">
+        <p>{currentError}</p>
+        <Link to="/">Browse videos</Link>
+      </section>
+    );
+  }
+  if (!video || video.id !== id) return <p className="centered muted">{currentLoading || !authSettled ? 'Loading…' : ''}</p>;
+
+  // Decided once per video: later re-fetches (cookie renewal) report newer positions and must not restart playback.
+  if (start.current?.id !== id) start.current = { id, at: video.resume_position_sec ?? null };
+  const resumeAt = start.current.at;
+  const startOver = () => {
+    if (videoRef.current) videoRef.current.currentTime = 0;
+    setResumeHidden(true);
+  };
+
+  return (
+    <article className="watch">
+      <div className="player-frame">
+        {video.playback ? (
+          <HlsPlayer
+            key={video.id}
+            videoId={video.id}
+            videoRef={videoRef}
+            src={video.playback.hls_url}
+            poster={video.thumbnail_url}
+            startPosition={resumeAt}
+            sessionKey={video.playback.expires_at}
+            onAccessExpired={renewAccess}
+          />
+        ) : (
+          <div className="player-placeholder">
+            {video.status === 'failed' ? `Encoding failed: ${video.error_message}` : 'This video is still being processed.'}
+          </div>
+        )}
+      </div>
+      {resumeAt !== null && !resumeHidden && (
+        <p className="resume-chip small">
+          Resuming from {formatDuration(resumeAt)} ·{' '}
+          <button className="link-button" onClick={startOver}>
+            Start over
+          </button>
+        </p>
+      )}
+      {playerError && (
+        <p className="error" role="alert">
+          {playerError}
+        </p>
+      )}
+      <div className="watch-header">
+        <h1>{video.title}</h1>
+        {video.playback && <QualityMenu />}
+      </div>
+      <div className="watch-meta">
+        <p className="muted small">
+          {video.owner} · {new Date(video.created_at).toLocaleDateString()}
+          {video.duration_sec != null && ` · ${formatDuration(video.duration_sec)}`}
+        </p>
+        {loggedIn && !video.is_owner && video.is_following !== undefined && (
+          <button
+            className={video.is_following ? 'secondary' : undefined}
+            onClick={() => dispatch(followRequested({ userId: video.owner_id, follow: !video.is_following }))}
+          >
+            {video.is_following ? 'Following' : `Follow ${video.owner}`}
+          </button>
+        )}
+      </div>
+      {video.description && <p className="description">{video.description}</p>}
+    </article>
+  );
+}
