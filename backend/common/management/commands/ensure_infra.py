@@ -14,6 +14,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from common import kafka, mongo, storage
+from common.analytics_access import ensure_analytics_access
 
 
 class Command(BaseCommand):
@@ -32,6 +33,8 @@ class Command(BaseCommand):
         if not options["skip_mongo"]:
             mongo.ensure_indexes()
             self.stdout.write("mongo indexes: ensured")
+        if ensure_analytics_access():
+            self.stdout.write("analytics databases and roles: ensured")
         self.ensure_dev_cdn_key()
 
     def ensure_dev_cdn_key(self):

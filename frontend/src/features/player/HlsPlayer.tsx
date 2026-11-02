@@ -57,6 +57,20 @@ const HlsPlayer = forwardRef<HTMLVideoElement, Props>(function HlsPlayer(
     trackerRef.current = tracker;
     const start = startRef.current;
 
+    // Capture phase: this runs before the events saga's own listener, so the final position is part of the
+    // last batch it sends while the page goes away.
+    const reportPosition = () => tracker.onLeaving(video.currentTime, video.paused);
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') reportPosition();
+    };
+    document.addEventListener('visibilitychange', onVisibility, { capture: true });
+    window.addEventListener('pagehide', reportPosition, { capture: true });
+    const stopReporting = () => {
+      reportPosition(); // leaving the watch page inside the app
+      document.removeEventListener('visibilitychange', onVisibility, { capture: true });
+      window.removeEventListener('pagehide', reportPosition, { capture: true });
+    };
+
     if (Hls.isSupported()) {
       const hls = new Hls({
         startPosition: start ?? -1,
@@ -100,6 +114,7 @@ const HlsPlayer = forwardRef<HTMLVideoElement, Props>(function HlsPlayer(
       hls.loadSource(src);
       hls.attachMedia(video);
       return () => {
+        stopReporting();
         hls.destroy();
         hlsRef.current = null;
         trackerRef.current = null;
@@ -115,6 +130,7 @@ const HlsPlayer = forwardRef<HTMLVideoElement, Props>(function HlsPlayer(
       video.addEventListener('loadedmetadata', seekToStart, { once: true });
       video.src = src;
       return () => {
+        stopReporting();
         video.removeEventListener('loadedmetadata', seekToStart);
         video.removeAttribute('src');
         video.load();
@@ -123,6 +139,7 @@ const HlsPlayer = forwardRef<HTMLVideoElement, Props>(function HlsPlayer(
     }
 
     dispatch(playerFailed('This browser cannot play HLS video.'));
+    return stopReporting;
   }, [videoId, src, dispatch]);
 
   // Fresh cookies arrived after a 403: resume loading where playback is, with the viewer's quality choice.

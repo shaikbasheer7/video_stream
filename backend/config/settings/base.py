@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "events",
     "notifications",
     "social",
+    "analytics",
 ]
 
 MIDDLEWARE = [
@@ -168,6 +169,10 @@ PLAYBACK_MAX_TTL_SEC = 12 * 60 * 60
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 MONGO_DB = os.environ.get("MONGO_DB", "streaming")
 EVENTS_TTL_DAYS = int(os.environ.get("EVENTS_TTL_DAYS", 90))
+
+# Data stack (Airflow + Superset). Roles are only created when these are set (see common/analytics_access.py).
+ANALYTICS_ETL_PASSWORD = os.environ.get("ANALYTICS_ETL_PASSWORD", "")
+ANALYTICS_RO_PASSWORD = os.environ.get("ANALYTICS_RO_PASSWORD", "")
 
 KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:29092")
 KAFKA_SECURITY_PROTOCOL = os.environ.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")  # SSL on AWS MSK

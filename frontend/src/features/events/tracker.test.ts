@@ -53,6 +53,20 @@ describe('PlaybackTracker', () => {
     ]);
   });
 
+  it('records the final position when the viewer leaves, once, and not if paused', () => {
+    const { tracker, events, watch, types } = setup();
+    tracker.onPlay(0);
+    watch(0, 7);
+    tracker.onLeaving(7, false);
+    tracker.onLeaving(7, false); // visibilitychange and pagehide both fire when a tab closes
+    expect(types()).toEqual(['play', 'progress']);
+    expect(events[1].position_sec).toBe(7);
+
+    tracker.onPause(9, false);
+    tracker.onLeaving(9, true); // the pause event already recorded it
+    expect(types()).toEqual(['play', 'progress', 'pause']);
+  });
+
   it('emits complete once at 95% with the time actually watched (seeks excluded)', () => {
     const { tracker, events, watch, types } = setup();
     tracker.onPlay(0);

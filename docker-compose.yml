@@ -146,6 +146,56 @@ services:
           memory: 2g
     stop_grace_period: 30s
 
+  # ---------- Data stack (optional, heavy): docker compose --profile data up -d ----------
+  # Both bind to 127.0.0.1 only: local tools with convenience logins.
+
+  # Airflow in one container (`standalone`: scheduler, API server, DAG processor). http://localhost:8081
+  airflow:
+    profiles: [data]
+    build:
+      context: ./data
+      dockerfile: airflow/Dockerfile
+    command: standalone
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "true" # no login: local only, see the port binding
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
+      ANALYTICS_DB_URL: postgresql://analytics_etl:${ANALYTICS_ETL_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      MONGO_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
+      MONGO_DB: ${MONGO_DB}
+    ports:
+      - "127.0.0.1:8081:8080"
+    depends_on:
+      django:
+        condition: service_healthy # migrations, the airflow database and the analytics roles exist
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  # Superset with the dashboards from data/superset/build_assets.py. http://localhost:8088
+  superset:
+    profiles: [data]
+    build:
+      context: ./data
+      dockerfile: superset/Dockerfile
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD}
+      SUPERSET_METADATA_DB_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/superset
+      ANALYTICS_RO_PASSWORD: ${ANALYTICS_RO_PASSWORD}
+      ANALYTICS_DB_HOST: postgres
+      ANALYTICS_DB_NAME: ${POSTGRES_DB}
+    ports:
+      - "127.0.0.1:8088:8088"
+    depends_on:
+      django:
+        condition: service_healthy
+
   postgres:
     image: postgres:16-alpine
     environment:

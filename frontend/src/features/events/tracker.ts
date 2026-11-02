@@ -95,6 +95,16 @@ export class PlaybackTracker {
     }
   }
 
+  /**
+   * The viewer is leaving (tab hidden or closed, navigated away): record where they got to. Without this,
+   * anything watched since the last progress event (up to 10 s) is lost, and short views count as nothing.
+   */
+  onLeaving(position: number, paused: boolean) {
+    if (paused || this.seeking || position <= this.lastProgressAt) return;
+    this.lastProgressAt = position;
+    this.send('progress', position);
+  }
+
   onWaiting() {
     if (this.bufferingSince === null && !this.seeking) this.bufferingSince = this.now();
   }

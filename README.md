@@ -16,6 +16,9 @@ Built phase by phase from the *Video Streaming Platform – MVP Blueprint*.
   test → approval → production, plus rollback) and an environment-agnostic smoke test.
   See **[docs/runbook.md](docs/runbook.md)**.
 
+- **Phase 7 (tracking and dashboards), done locally:** a daily Airflow pipeline from raw events to analytics
+  tables, and three Superset dashboards defined in code. See [Analytics](#analytics).
+
 ## Quick start
 
 Requires Docker Desktop. Node and FFmpeg don't need to be installed locally.
@@ -60,7 +63,7 @@ worker/     FFmpeg encoding worker
 infra/      nginx/ (gateway config), local-cdn/ (CloudFront stand-in), terraform/ (bootstrap, app, modules/)
 deploy/     production Compose file, host deploy script, CI rollout script, smoke test
 docs/       runbook.md: AWS setup, deploys, rollback, operations
-data/       Airflow DAGs, notebooks (Phase 7+)
+data/       pipeline/ (pandas aggregation), airflow/ (DAG), superset/ (dashboards as code)
 ```
 
 ## Auth design
@@ -190,6 +193,48 @@ video.ready ───────────────> feed-consumer ──�
 - **Follows:** `POST|DELETE /api/users/{id}/follow/` and `GET /api/feed/`. Notifications:
   `GET /api/notifications/` and `POST /api/notifications/read/`.
 
+## Analytics
+
+Optional and heavy (Airflow alone uses over 1 GB of memory), so it sits behind a Compose profile:
+
+```sh
+docker compose --profile data up -d --build
+```
+
+| Tool | URL | Login |
+|---|---|---|
+| Airflow | http://localhost:8081 | none (local only, bound to 127.0.0.1) |
+| Superset | http://localhost:8088 | `admin` / `SUPERSET_ADMIN_PASSWORD` from `.env` |
+
+**Flow:** `playback_events` (MongoDB) → DAG `daily_video_pipeline` (02:00 UTC, pandas) → analytics tables
+(PostgreSQL) → Superset dashboards **Platform overview**, **Video retention** and **Streaming quality**.
+
+- **Tables** (Django migrations, `backend/analytics`): `daily_video_stats`, `daily_video_retention`,
+  `daily_streaming_quality`, `daily_platform_stats`.
+- **Definitions:**
+  - A *view* is a session with a play event, and days are by server receive time.
+  - Watch time is reconstructed from the event stream (`data/pipeline/sessions.py`), so pauses, seeks and
+    rewatches are handled.
+  - *Avg % watched* counts each part of the video once per session.
+  - A *stall* is a wait after playback has started; waits before it are startup time.
+- **Re-runs are safe:** each day is replaced in one transaction, so a re-run can't double-count. A data quality
+  task fails the DAG if the tables disagree with each other or with the raw events.
+- **Access:** Superset connects as `analytics_ro`, which can read only analytics tables and views, never
+  `accounts_user`. The pipeline's `analytics_etl` role writes only its own tables.
+- **Dashboards are code:** edit `data/superset/build_assets.py` and restart `superset`. Changes made only in the
+  Superset UI to these dashboards are overwritten on the next start.
+
+```sh
+# Recompute a range
+docker compose --profile data exec airflow python -m pipeline.run --from 2026-10-01 --to 2026-10-31
+# Demo data, for local dashboards (session ids start with "demo-"; refuses to run against Atlas)
+docker compose --profile data exec airflow python -m pipeline.seed_demo --days 14
+docker compose --profile data exec airflow python -m pipeline.seed_demo --clear
+```
+
+After `--clear`, recompute the same dates so the tables drop the demo numbers. The data stack isn't part of
+the AWS Terraform yet.
+
 ## Operations
 
 - **Logs:** every service writes one JSON object per line (`LOG_FORMAT=text` for readable local output),
@@ -306,4 +351,4 @@ Checks that run without AWS: `sh infra/terraform/check.sh` (fmt + validate), Tri
 
 - **Apply Part B to a real AWS account:** needs your go-ahead and credentials. It costs money (see the
   runbook).
-- **Phase 7:** tracking and dashboards (Airflow, Superset).
+- **Phase 8:** recommendations (trending, similar videos, `GET /api/recommendations/`).
