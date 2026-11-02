@@ -1,4 +1,4 @@
-﻿"""Local stand-in for CloudFront (development only).
+"""Local stand-in for CloudFront (development only).
 
 Behaves like the distribution in infra/terraform:
 - It is the only reader of the private bucket (like Origin Access Control).

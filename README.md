@@ -9,6 +9,12 @@ Built phase by phase from the *Video Streaming Platform – MVP Blueprint*.
 - **Phase 3 (encoding), done:** an FFmpeg worker encodes HLS 480p/720p/1080p plus a thumbnail, with retries and a DLQ; a status consumer updates the database; the UI polls until a video is ready.
 - **Phase 4 (playback), done:** CDN delivery with CloudFront signed cookies, an hls.js player with automatic and manual quality, public browse and watch pages, and Terraform for S3 and CloudFront.
 - **Phase 5 (subscribers and events), done:** playback events through Kafka into MongoDB, resume where you left off, in-app notifications, and follows with a Following feed.
+- **Phase 6, part A (hardening), done:** JSON logs with correlation IDs, Sentry, a readiness check,
+  consumer-lag and DLQ monitoring, CSP and security headers, deploy checks and image scanning in CI.
+- **Phase 6, part B (deployment), written and validated, not yet applied to AWS:** Terraform for the whole
+  AWS platform, a production Compose file and deploy scripts, a GitHub Actions pipeline (staging → smoke
+  test → approval → production, plus rollback) and an environment-agnostic smoke test.
+  See **[docs/runbook.md](docs/runbook.md)**.
 
 ## Quick start
 
@@ -39,6 +45,7 @@ docker compose exec django python manage.py createsuperuser
 | cdn        | (via nginx `/cdn/`) | Local stand-in for CloudFront: checks signed cookies, only reader of the bucket |
 | mongo      | 27017        | Playback events, watch progress, notifications, feeds              |
 | encoder    | (none)       | FFmpeg worker (group `encoder`), limited to 2 CPUs. `--scale encoder=N` |
+| monitor            | (none) | `manage.py monitor`: consumer lag and DLQ size every 60 s           |
 | status-consumer    | (none) | `run_consumer status`: video.ready/failed → Video rows (group `api-status`) |
 | analytics-consumer | (none) | `run_consumer analytics`: events.playback → MongoDB (group `analytics`) |
 | notify-consumer    | (none) | `run_consumer notify`: video.ready/failed → notifications (group `notify`) |
@@ -47,10 +54,12 @@ docker compose exec django python manage.py createsuperuser
 ## Layout
 
 ```
-backend/    Django project: config/ (split settings), accounts/ (User + JWT auth), common/
-frontend/   React + TypeScript + Vite: app/ (store, saga, axios client), features/auth, features/videos
-infra/      nginx config (later: AWS / IaC)
-worker/     FFmpeg encoding worker (Phase 3)
+backend/    Django: config/, accounts/, videos/, events/, notifications/, social/, common/ (Kafka, S3, Mongo, logs)
+frontend/   React + TypeScript + Vite: app/ (store, sagas, API client), features/ (auth, upload, videos, player, ...)
+worker/     FFmpeg encoding worker
+infra/      nginx/ (gateway config), local-cdn/ (CloudFront stand-in), terraform/ (bootstrap, app, modules/)
+deploy/     production Compose file, host deploy script, CI rollout script, smoke test
+docs/       runbook.md: AWS setup, deploys, rollback, operations
 data/       Airflow DAGs, notebooks (Phase 7+)
 ```
 
@@ -181,6 +190,48 @@ video.ready ───────────────> feed-consumer ──�
 - **Follows:** `POST|DELETE /api/users/{id}/follow/` and `GET /api/feed/`. Notifications:
   `GET /api/notifications/` and `POST /api/notifications/read/`.
 
+## Operations
+
+- **Logs:** every service writes one JSON object per line (`LOG_FORMAT=text` for readable local output),
+  ready for CloudWatch Logs.
+- **Correlation ID:** nginx gives each request an `X-Request-ID`, replacing any the client sent. Django
+  logs it and returns it. Kafka events carry it as `correlation_id`, and consumers and the encoder log
+  under it, so one upload can be followed from `/complete` through encoding to the status update:
+
+  ```sh
+  docker compose logs --no-log-prefix | grep <request_id>
+  ```
+
+- **Health:**
+  - `/api/health/` is liveness (database only), for Docker and the load balancer.
+  - `/api/health/ready/` checks Postgres, MongoDB, Kafka and S3, for deploy smoke tests. Only staff see
+    error details.
+- **Monitoring:** the `monitor` service logs consumer lag per group and the DLQ size every minute. It
+  warns when a group's lag stays above 100 for two checks in a row, or when the DLQ grows. With
+  `CLOUDWATCH_NAMESPACE` set, it also pushes `ConsumerLag` and `DeadLetterMessages` metrics for
+  CloudWatch alarms. One-off snapshot: `docker compose exec django python manage.py monitor --once`.
+- **Errors:** set `SENTRY_DSN` (Django, consumers, encoder) and the `VITE_SENTRY_DSN` build argument
+  (browser). Without them, Sentry isn't loaded at all. PII sending is off.
+
+## Security
+
+| Checklist item (blueprint §11) | Where |
+|---|---|
+| HTTPS everywhere | `config/settings/prod.py`: SSL redirect (health checks exempt), HSTS, secure cookies; TLS at nginx / load balancer and CloudFront |
+| Access token in memory, refresh token in an httpOnly cookie, rotation + blacklist | `accounts/views.py`, `app/api.ts` |
+| Rate limits | nginx (`auth` 10/min, `api` 20/s) and DRF scopes (`auth`, `upload` 30/h, `events` 120/min) |
+| Validate uploads, ffprobe in the worker | `videos/serializers.py`, `worker/encoder/probe.py` |
+| Private bucket, OAC, signed cookies | `infra/terraform/media`, `videos/playback.py` |
+| Least-privilege IAM, no keys in code or images | Phase 6 part B (Terraform roles); `.env` stays out of git and images |
+| Owner-only edits and deletes | `VideoViewSet.get_owned_object` (tested) |
+| Dependency and image scanning | `.github/dependabot.yml`; Trivy fails CI on fixable CRITICAL/HIGH issues |
+
+Also:
+- The app pages get a strict Content-Security-Policy (no inline or eval'd scripts) and security headers
+  from nginx. Set `CSP_MEDIA_ORIGINS` and `CSP_UPLOAD_ORIGINS` per environment.
+- CI runs `manage.py check --deploy` against the production settings.
+- All app containers run as non-root.
+
 ## Development
 
 Backend tests and lint (no local Python setup needed):
@@ -229,8 +280,30 @@ Vitest, then builds both Docker images.
 
 - **`keepalive` fetch instead of `sendBeacon`** for the final flush (see above). `sendBeacon` remains the
   fallback.
+- **Kafka over TLS on MSK** (`KAFKA_SECURITY_PROTOCOL=SSL`). Locally it stays plaintext.
 
-## Next: Phase 6 (hardening and deployment)
+## Deployment (AWS)
 
-More tests, structured logging, Sentry, consumer-lag monitoring, the security checklist, AWS provisioning
-(EC2, RDS, MongoDB Atlas, MSK, ECR) and a CI/CD pipeline through staging to production.
+Everything for AWS is in the repository but **has not been applied to any account**. The
+[runbook](docs/runbook.md) walks through first-time setup, deploys, rollback and operations. In short:
+
+- `infra/terraform/bootstrap`: once per account. State bucket, ECR, releases bucket, GitHub OIDC.
+- `infra/terraform/app`: one environment per state (`-var-file=staging.tfvars` / `production.tfvars`).
+  VPC, load balancer with TLS, EC2 hosts, RDS, MSK, IAM, config and secrets, logs and alarms, plus the
+  S3 + CloudFront media module.
+- `.github/workflows/deploy.yml`: green `main` → images to ECR → staging → full smoke test → approval →
+  production. Manual re-run with an older SHA for rollback.
+- `deploy/smoke.py` works against any environment, including this local stack:
+
+  ```sh
+  SMOKE_EMAIL=... SMOKE_PASSWORD=... python3 deploy/smoke.py --base-url http://localhost:8080 --full
+  ```
+
+Checks that run without AWS: `sh infra/terraform/check.sh` (fmt + validate), Trivy's config scan, the
+`deploy/tests` unit tests and shellcheck. CI runs all of them.
+
+## Next
+
+- **Apply Part B to a real AWS account:** needs your go-ahead and credentials. It costs money (see the
+  runbook).
+- **Phase 7:** tracking and dashboards (Airflow, Superset).

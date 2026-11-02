@@ -15,15 +15,13 @@ export default function PlayerPage() {
   const authSettled = authStatus === 'authenticated' || authStatus === 'anonymous';
   const playerError = useAppSelector((s) => s.player.error);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const start = useRef<{ id: string; at: number | null } | null>(null);
-  const [resumeHidden, setResumeHidden] = useState(false);
+  // The video whose "Resuming from…" chip was dismissed (so it reappears for the next video).
+  const [resumeDismissedFor, setResumeDismissedFor] = useState<string | null>(null);
   const renewAccess = useCallback(() => dispatch(videoRequested(id)), [dispatch, id]);
 
   // Wait until we know who's watching: logged-in viewers get their resume position and follow state.
   useEffect(() => {
-    if (!authSettled) return;
-    dispatch(videoRequested(id));
-    setResumeHidden(false);
+    if (authSettled) dispatch(videoRequested(id));
   }, [dispatch, id, authSettled, loggedIn]);
 
   if (currentError) {
@@ -36,12 +34,11 @@ export default function PlayerPage() {
   }
   if (!video || video.id !== id) return <p className="centered muted">{currentLoading || !authSettled ? 'Loading…' : ''}</p>;
 
-  // Decided once per video: later re-fetches (cookie renewal) report newer positions and must not restart playback.
-  if (start.current?.id !== id) start.current = { id, at: video.resume_position_sec ?? null };
-  const resumeAt = start.current.at;
+  // Stable per video: the reducer keeps the first resume position when the same video is re-fetched.
+  const resumeAt = video.resume_position_sec ?? null;
   const startOver = () => {
     if (videoRef.current) videoRef.current.currentTime = 0;
-    setResumeHidden(true);
+    setResumeDismissedFor(id);
   };
 
   return (
@@ -50,8 +47,8 @@ export default function PlayerPage() {
         {video.playback ? (
           <HlsPlayer
             key={video.id}
+            ref={videoRef}
             videoId={video.id}
-            videoRef={videoRef}
             src={video.playback.hls_url}
             poster={video.thumbnail_url}
             startPosition={resumeAt}
@@ -64,7 +61,7 @@ export default function PlayerPage() {
           </div>
         )}
       </div>
-      {resumeAt !== null && !resumeHidden && (
+      {resumeAt !== null && resumeDismissedFor !== id && (
         <p className="resume-chip small">
           Resuming from {formatDuration(resumeAt)} ·{' '}
           <button className="link-button" onClick={startOver}>

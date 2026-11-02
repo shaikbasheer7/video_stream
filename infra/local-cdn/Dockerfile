@@ -2,7 +2,7 @@
 # Local development only: stands in for CloudFront. Not deployed.
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
-RUN pip install boto3==1.40.0 cryptography==45.0.7 \
+RUN pip install boto3==1.40.0 cryptography==50.0.2 \
     && useradd --create-home --uid 1000 app
 WORKDIR /app
 COPY cdn.py .

@@ -1,0 +1,162 @@
+# Continuous delivery (blueprint section 10, steps 6-10):
+#   CI green on main -> build + push images tagged with the commit SHA -> deploy staging -> smoke test
+#   -> manual approval (GitHub "production" environment) -> deploy production -> smoke test.
+# Rollback: run this workflow manually with an earlier image tag (see docs/runbook.md).
+#
+# AWS access is via OIDC (no stored keys). Required configuration:
+#   repository variables : AWS_REGION, AWS_BUILD_ROLE_ARN, ECR_REGISTRY, RELEASES_BUCKET
+#   environment variables: AWS_DEPLOY_ROLE_ARN, APP_URL                 (environments: staging, production)
+#   environment secrets  : SMOKE_EMAIL, SMOKE_PASSWORD                  (a dedicated smoke-test account)
+#   production environment: add required reviewers, so promotion waits for a human.
+
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to (re)deploy
+        type: choice
+        options: [staging, production]
+        required: true
+      image_tag:
+        description: Image tag (git SHA) to deploy, e.g. for a rollback
+        required: true
+
+permissions:
+  contents: read
+  id-token: write # OIDC token for AWS
+
+concurrency:
+  group: deploy # one rollout at a time; never cancel a deploy halfway
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - id: tag
+        run: echo "tag=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_BUILD_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and push api
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: true
+          tags: ${{ vars.ECR_REGISTRY }}/streaming/api:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+      - name: Build and push encoder
+        uses: docker/build-push-action@v6
+        with:
+          context: worker
+          push: true
+          tags: ${{ vars.ECR_REGISTRY }}/streaming/encoder:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha,scope=encoder
+          cache-to: type=gha,mode=max,scope=encoder
+      - name: Build and push web
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontend/Dockerfile
+          push: true
+          tags: ${{ vars.ECR_REGISTRY }}/streaming/web:${{ steps.tag.outputs.tag }}
+          build-args: |
+            GIT_SHA=${{ steps.tag.outputs.tag }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+      - name: Publish release files (compose file + deploy scripts)
+        run: aws s3 cp deploy/ "s3://${{ vars.RELEASES_BUCKET }}/releases/${{ steps.tag.outputs.tag }}/" --recursive --exclude "tests/*"
+
+  staging:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: ${{ vars.APP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.tag }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Deploy (API host migrates first, then encoders)
+        run: sh deploy/ci-deploy.sh staging "${{ needs.build.outputs.tag }}"
+        env:
+          RELEASES_BUCKET: ${{ vars.RELEASES_BUCKET }}
+      - name: "Smoke test: upload, encode, play, delete"
+        run: python3 deploy/smoke.py --base-url "${{ vars.APP_URL }}" --full
+        env:
+          SMOKE_EMAIL: ${{ secrets.SMOKE_EMAIL }}
+          SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
+
+  production:
+    needs: [build, staging]
+    runs-on: ubuntu-latest
+    environment:
+      name: production # required reviewers on this environment = the manual approval gate
+      url: ${{ vars.APP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.tag }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Deploy
+        run: sh deploy/ci-deploy.sh production "${{ needs.build.outputs.tag }}"
+        env:
+          RELEASES_BUCKET: ${{ vars.RELEASES_BUCKET }}
+      - name: Smoke test (read-only checks + login)
+        run: python3 deploy/smoke.py --base-url "${{ vars.APP_URL }}"
+        env:
+          SMOKE_EMAIL: ${{ secrets.SMOKE_EMAIL }}
+          SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
+
+  # Manual (re)deploy of an existing tag: rollback or redeploy. Images and release files for the tag must exist.
+  redeploy:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ vars.APP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.image_tag }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Deploy the requested tag
+        # Inputs go through env vars (never interpolated into the script) and must look like a commit SHA.
+        run: |
+          case "$TAG" in *[!0-9a-f]*|"") echo "image_tag must be a git commit SHA" >&2; exit 1 ;; esac
+          sh deploy/ci-deploy.sh "$TARGET_ENV" "$TAG"
+        env:
+          TAG: ${{ inputs.image_tag }}
+          TARGET_ENV: ${{ inputs.environment }}
+          RELEASES_BUCKET: ${{ vars.RELEASES_BUCKET }}
+      - name: Smoke test
+        run: python3 deploy/smoke.py --base-url "${{ vars.APP_URL }}"
+        env:
+          SMOKE_EMAIL: ${{ secrets.SMOKE_EMAIL }}
+          SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}

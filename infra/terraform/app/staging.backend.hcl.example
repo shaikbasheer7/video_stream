@@ -1,0 +1,6 @@
+# Copy to staging.backend.hcl; production.backend.hcl is the same with key = "app/production.tfstate".
+bucket         = "streaming-tfstate-111111111111"
+key            = "app/staging.tfstate"
+region         = "us-east-1"
+dynamodb_table = "streaming-tflock"
+encrypt        = true

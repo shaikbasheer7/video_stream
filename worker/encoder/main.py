@@ -4,6 +4,7 @@ Delivery is at-least-once: the offset is committed only after a message is fully
 (ready or failed published). A crash mid-encode means the message is redelivered and redone.
 """
 
+import contextvars
 import json
 import logging
 import signal
@@ -14,7 +15,7 @@ from pathlib import Path, PurePosixPath
 
 from confluent_kafka import Consumer, KafkaException, TopicPartition
 
-from . import config, messaging, pipeline, storage
+from . import config, logs, messaging, pipeline, storage
 from .db import Database
 from .errors import InvalidSource
 
@@ -129,7 +130,8 @@ def run_while_polling(consumer, fn):
     consumer.pause(consumer.assignment())
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(fn)
+            # Executor threads don't inherit context variables; carry the correlation id over.
+            future = pool.submit(contextvars.copy_context().run, fn)
             while not future.done():
                 touch_heartbeat()
                 stray = consumer.poll(0.5)
@@ -144,7 +146,7 @@ def run_while_polling(consumer, fn):
 
 
 def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logs.configure()
     stopping = False
 
     def stop(*_):
@@ -156,12 +158,9 @@ def main():
     signal.signal(signal.SIGINT, stop)
 
     consumer = Consumer(
-        {
-            "bootstrap.servers": config.KAFKA_BOOTSTRAP_SERVERS,
-            "group.id": config.GROUP_ID,
-            "enable.auto.commit": False,
-            "auto.offset.reset": "earliest",
-        }
+        config.kafka_config(
+            **{"group.id": config.GROUP_ID, "enable.auto.commit": False, "auto.offset.reset": "earliest"}
+        )
     )
     consumer.subscribe([messaging.VIDEO_UPLOADED])
     job = EncodeJob(Database())
@@ -185,6 +184,7 @@ def main():
                 consumer.commit(message=msg, asynchronous=False)
                 continue
 
+            token = logs.correlation_id.set(event.get("correlation_id") or event.get("event_id"))
             try:
                 run_while_polling(consumer, lambda event=event: job.handle(event))
             except Exception:
@@ -193,6 +193,8 @@ def main():
                 consumer.seek(TopicPartition(msg.topic(), msg.partition(), msg.offset()))
                 time.sleep(config.RETRY_BACKOFF_SEC)
                 continue
+            finally:
+                logs.correlation_id.reset(token)
 
             try:
                 consumer.commit(message=msg, asynchronous=False)

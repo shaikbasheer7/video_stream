@@ -33,6 +33,10 @@ services:
       dockerfile: frontend/Dockerfile
     ports:
       - "8080:80"
+    environment:
+      CSP_UPLOAD_ORIGINS: http://localhost:8333  # browsers PUT uploads straight to local S3
+    volumes:
+      - ./infra/nginx/local-cdn.conf:/etc/nginx/extra/local-cdn.conf:ro
     depends_on:
       django:
         condition: service_healthy
@@ -60,6 +64,7 @@ services:
       <<: *backend-env-vars
       ENSURE_INFRA: "1"  # bucket, topics and the dev CDN signing key
       CLOUDFRONT_PRIVATE_KEY_PATH: /var/cdn-keys/private.pem
+      SERVICE_NAME: api
     volumes:
       - cdn-keys:/var/cdn-keys
     depends_on:
@@ -82,21 +87,48 @@ services:
   status-consumer:
     <<: *consumer
     command: ["python", "manage.py", "run_consumer", "status"]
+    environment:
+      <<: *backend-env-vars
+      RUN_MIGRATIONS: "0"
+      SERVICE_NAME: status-consumer
 
   # events.playback -> MongoDB playback_events + watch_progress.
   analytics-consumer:
     <<: *consumer
     command: ["python", "manage.py", "run_consumer", "analytics"]
+    environment:
+      <<: *backend-env-vars
+      RUN_MIGRATIONS: "0"
+      SERVICE_NAME: analytics-consumer
 
   # video.ready / video.failed -> in-app notification for the uploader.
   notify-consumer:
     <<: *consumer
     command: ["python", "manage.py", "run_consumer", "notify"]
+    environment:
+      <<: *backend-env-vars
+      RUN_MIGRATIONS: "0"
+      SERVICE_NAME: notify-consumer
 
   # video.ready -> followers' feeds.
   feed-consumer:
     <<: *consumer
     command: ["python", "manage.py", "run_consumer", "feed"]
+    environment:
+      <<: *backend-env-vars
+      RUN_MIGRATIONS: "0"
+      SERVICE_NAME: feed-consumer
+
+  # Consumer lag + DLQ size every minute, as JSON log lines (and CloudWatch metrics in AWS).
+  monitor:
+    <<: *consumer
+    command: ["python", "manage.py", "monitor", "--interval", "60"]
+    environment:
+      <<: *backend-env-vars
+      RUN_MIGRATIONS: "0"
+      SERVICE_NAME: monitor
+    healthcheck:
+      disable: true
 
   # FFmpeg worker. Scale with: docker compose up -d --scale encoder=3 (topics have 6 partitions).
   encoder:

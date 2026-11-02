@@ -8,6 +8,7 @@ from functools import cache
 from confluent_kafka import Producer
 
 from . import config
+from .logs import correlation_id
 
 SCHEMA_VERSION = 1
 VIDEO_UPLOADED = "video.uploaded"
@@ -22,20 +23,15 @@ class PublishError(Exception):
 
 @cache
 def producer():
-    return Producer(
-        {
-            "bootstrap.servers": config.KAFKA_BOOTSTRAP_SERVERS,
-            "acks": "all",
-            "enable.idempotence": True,
-            "message.timeout.ms": 30_000,
-        }
-    )
+    return Producer(config.kafka_config(**{"acks": "all", "enable.idempotence": True, "message.timeout.ms": 30_000}))
 
 
 def build_event(event, payload):
+    event_id = str(uuid.uuid4())
     return {
         "event": event,
-        "event_id": str(uuid.uuid4()),
+        "event_id": event_id,
+        "correlation_id": correlation_id.get() or event_id,  # carried over from video.uploaded
         "occurred_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         **payload,
         "schema_version": SCHEMA_VERSION,

@@ -72,7 +72,14 @@ const videosSlice = createSlice({
       state.currentError = null;
     },
     videoLoaded(state, action: PayloadAction<Video>) {
-      state.current = action.payload;
+      const previous = state.current;
+      const video = action.payload;
+      // A re-fetch of the same video (e.g. to renew CDN cookies) reports a newer watch position;
+      // keep the original one so the player isn't restarted mid-playback.
+      if (previous?.id === video.id && previous.resume_position_sec !== undefined) {
+        video.resume_position_sec = previous.resume_position_sec;
+      }
+      state.current = video;
       state.currentLoading = false;
     },
     videoLoadFailed(state, action: PayloadAction<string>) {

@@ -1,5 +1,5 @@
 import Hls, { ErrorTypes, Events } from 'hls.js';
-import { useEffect, useRef, type RefObject } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { useAppDispatch, useAppSelector } from '../../app/store';
 import { playbackEvent } from '../events/eventsSaga';
 import { PlaybackTracker } from '../events/tracker';
@@ -24,14 +24,18 @@ interface Props {
   sessionKey: string;
   /** Called when the CDN answers 403: the cookies expired. Re-fetching the video renews them. */
   onAccessExpired: () => void;
-  /** Lets the page control the element (e.g. "Start over"). */
-  videoRef: RefObject<HTMLVideoElement>;
 }
 
 const MAX_MEDIA_RECOVERIES = 2;
 
-export default function HlsPlayer({ videoId, src, poster, startPosition, sessionKey, onAccessExpired, videoRef }: Props) {
+/** The forwarded ref is the <video> element, so the page can control it (e.g. "Start over"). */
+const HlsPlayer = forwardRef<HTMLVideoElement, Props>(function HlsPlayer(
+  { videoId, src, poster, startPosition, sessionKey, onAccessExpired },
+  forwardedRef,
+) {
   const dispatch = useAppDispatch();
+  const videoRef = useRef<HTMLVideoElement>(null);
+  useImperativeHandle(forwardedRef, () => videoRef.current as HTMLVideoElement, []);
   const selected = useAppSelector((s) => s.player.selected);
   const hlsRef = useRef<Hls | null>(null);
   const trackerRef = useRef<PlaybackTracker | null>(null);
@@ -119,7 +123,7 @@ export default function HlsPlayer({ videoId, src, poster, startPosition, session
     }
 
     dispatch(playerFailed('This browser cannot play HLS video.'));
-  }, [videoId, src, dispatch, videoRef]);
+  }, [videoId, src, dispatch]);
 
   // Fresh cookies arrived after a 403: resume loading where playback is, with the viewer's quality choice.
   useEffect(() => {
@@ -168,4 +172,6 @@ export default function HlsPlayer({ videoId, src, poster, startPosition, session
       }}
     />
   );
-}
+});
+
+export default HlsPlayer;

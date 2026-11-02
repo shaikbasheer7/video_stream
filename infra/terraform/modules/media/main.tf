@@ -1,13 +1,10 @@
 # Media storage and delivery: private S3 bucket + CloudFront with Origin Access Control and signed cookies.
-# Mirrors the local stack (SeaweedFS + infra/local-cdn). Validate with `terraform validate`; apply in Phase 6.
+# Mirrors the local stack (SeaweedFS + infra/local-cdn). Used by infra/terraform/envs/*.
 #
-# Before applying:
-#   openssl genrsa -out cf_private.pem 2048
-#   openssl rsa -pubout -in cf_private.pem -out cf_public.pem
-#   Store cf_private.pem in Secrets Manager (it never goes through Terraform state); pass cf_public.pem below.
+# The playback signing key pair is generated outside Terraform (see docs/runbook.md): the public half is
+# passed in here, the private half goes straight to Secrets Manager and never touches Terraform state.
 
 terraform {
-  required_version = ">= 1.6"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -16,16 +13,14 @@ terraform {
   }
 }
 
-provider "aws" {
-  region = var.region
-}
-
 locals {
   bucket_name = "${var.name_prefix}-media"
 }
 
 # ---------- S3 (private) ----------
 
+# No versioning on purpose: deleting a video must really remove the user's content, not keep old versions.
+#trivy:ignore:AVD-AWS-0090
 resource "aws_s3_bucket" "media" {
   bucket = local.bucket_name
 }
@@ -38,6 +33,8 @@ resource "aws_s3_bucket_public_access_block" "media" {
   restrict_public_buckets = true
 }
 
+# SSE-S3 encryption; a customer-managed KMS key would add cost, not protection, here.
+#trivy:ignore:AVD-AWS-0132
 resource "aws_s3_bucket_server_side_encryption_configuration" "media" {
   bucket = aws_s3_bucket.media.id
   rule {
@@ -191,11 +188,15 @@ data "aws_cloudfront_cache_policy" "caching_optimized" {
   name = "Managed-CachingOptimized"
 }
 
+# MVP: no WAF (media needs signed cookies anyway) and no access logs (CloudWatch metrics cover it); both are
+# listed as follow-ups in docs/runbook.md.
+#trivy:ignore:AVD-AWS-0010
+#trivy:ignore:AVD-AWS-0011
 resource "aws_cloudfront_distribution" "media" {
   enabled     = true
   comment     = "${var.name_prefix} media (HLS + thumbnails)"
   price_class = var.price_class
-  aliases     = var.cdn_domain_name == "" ? [] : [var.cdn_domain_name]
+  aliases     = [var.cdn_domain_name]
 
   origin {
     origin_id                = "media-s3"
@@ -252,20 +253,11 @@ resource "aws_cloudfront_distribution" "media" {
   }
 
   # Signed cookies set by the API only reach the CDN if both share a parent domain
-  # (api: example.com, cdn: media.example.com, CDN_COOKIE_DOMAIN=.example.com), so production needs
-  # the custom domain and its ACM certificate (us-east-1).
-  dynamic "viewer_certificate" {
-    for_each = var.acm_certificate_arn == "" ? [1] : []
-    content {
-      cloudfront_default_certificate = true
-    }
-  }
-  dynamic "viewer_certificate" {
-    for_each = var.acm_certificate_arn == "" ? [] : [1]
-    content {
-      acm_certificate_arn      = var.acm_certificate_arn
-      ssl_support_method       = "sni-only"
-      minimum_protocol_version = "TLSv1.2_2021"
-    }
+  # (app: app.example.com, cdn: media.example.com, CDN_COOKIE_DOMAIN=.example.com), so a custom domain with
+  # its ACM certificate (us-east-1) is required; that also enforces modern TLS.
+  viewer_certificate {
+    acm_certificate_arn      = var.acm_certificate_arn
+    ssl_support_method       = "sni-only"
+    minimum_protocol_version = "TLSv1.2_2021"
   }
 }

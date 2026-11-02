@@ -117,7 +117,7 @@ class Command(BaseCommand):
             )
 
     def ensure_topics(self):
-        admin = AdminClient({"bootstrap.servers": settings.KAFKA_BOOTSTRAP_SERVERS})
+        admin = AdminClient(kafka.client_config())
         topics = [
             NewTopic(
                 name,

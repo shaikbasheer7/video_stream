@@ -1,3 +1,7 @@
 * text=auto
 *.sh text eol=lf
 Dockerfile text eol=lf
+# Consumed on Linux even when applied or built from Windows (a CRLF user_data script won't run).
+*.tftpl text eol=lf
+*.template text eol=lf
+*.conf text eol=lf

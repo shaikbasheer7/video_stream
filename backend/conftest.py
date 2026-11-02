@@ -10,6 +10,14 @@ from videos import playback
 @pytest.fixture(autouse=True)
 def mongo_db(monkeypatch, settings):
     """Every test gets a fresh in-memory MongoDB with the real indexes (unique keys behave as in production)."""
+    # mongomock 4.3 predates pymongo 4.11, whose UpdateOne passes `sort=` into bulk writes. Real MongoDB
+    # accepts it; drop it for the mock (we never sort bulk updates).
+    original_add_update = mongomock.collection.BulkOperationBuilder.add_update
+
+    def add_update(self, *args, sort=None, **kwargs):
+        return original_add_update(self, *args, **kwargs)
+
+    monkeypatch.setattr(mongomock.collection.BulkOperationBuilder, "add_update", add_update)
     client = mongomock.MongoClient(tz_aware=True)
     monkeypatch.setattr(mongo, "client", lambda: client)
     database = client[settings.MONGO_DB]

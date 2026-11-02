@@ -1,8 +1,3 @@
-variable "region" {
-  type    = string
-  default = "us-east-1"
-}
-
 variable "name_prefix" {
   type        = string
   description = "Prefix for resource names, e.g. streaming-prod"
@@ -20,13 +15,11 @@ variable "cloudfront_public_key_pem" {
 
 variable "cdn_domain_name" {
   type        = string
-  default     = ""
-  description = "Custom CDN domain under the app's domain, e.g. media.example.com"
+  description = "Custom CDN domain under the app's domain, e.g. media.example.com (required: see signed cookies)"
 }
 
 variable "acm_certificate_arn" {
   type        = string
-  default     = ""
   description = "ACM certificate (us-east-1) for cdn_domain_name"
 }
 

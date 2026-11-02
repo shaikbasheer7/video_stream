@@ -12,6 +12,8 @@ from confluent_kafka import Consumer, KafkaException, Producer, TopicPartition
 from django.conf import settings
 from django.db import close_old_connections
 
+from .logs import correlation_id
+
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
@@ -28,22 +30,32 @@ class PublishError(Exception):
     pass
 
 
+def client_config(**extra):
+    """Connection settings shared by every Kafka client (producer, consumers, admin).
+
+    Locally Kafka is plaintext; on AWS MSK the brokers require TLS (KAFKA_SECURITY_PROTOCOL=SSL).
+    """
+    config = {
+        "bootstrap.servers": settings.KAFKA_BOOTSTRAP_SERVERS,
+        "security.protocol": settings.KAFKA_SECURITY_PROTOCOL,
+    }
+    if settings.KAFKA_SECURITY_PROTOCOL == "SSL":
+        config["ssl.ca.location"] = settings.KAFKA_SSL_CA_LOCATION
+    return {**config, **extra}
+
+
 @cache
 def producer():
-    return Producer(
-        {
-            "bootstrap.servers": settings.KAFKA_BOOTSTRAP_SERVERS,
-            "acks": "all",
-            "enable.idempotence": True,
-            "message.timeout.ms": 10_000,
-        }
-    )
+    return Producer(client_config(**{"acks": "all", "enable.idempotence": True, "message.timeout.ms": 10_000}))
 
 
 def build_event(event, payload):
+    event_id = str(uuid.uuid4())
     return {
         "event": event,
-        "event_id": str(uuid.uuid4()),
+        "event_id": event_id,
+        # Inherited from the request/message being handled, so one upload can be traced end to end.
+        "correlation_id": correlation_id.get() or event_id,
         "occurred_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         **payload,
         "schema_version": SCHEMA_VERSION,
@@ -101,12 +113,7 @@ def run_consumer(topics, group_id, handler, should_stop, heartbeat_file=None, re
     Handlers must be idempotent and should swallow errors that a retry cannot fix.
     """
     consumer = Consumer(
-        {
-            "bootstrap.servers": settings.KAFKA_BOOTSTRAP_SERVERS,
-            "group.id": group_id,
-            "enable.auto.commit": False,
-            "auto.offset.reset": "earliest",
-        }
+        client_config(**{"group.id": group_id, "enable.auto.commit": False, "auto.offset.reset": "earliest"})
     )
     consumer.subscribe(topics)
     logger.info("consuming %s as group %s", topics, group_id)
@@ -128,6 +135,7 @@ def run_consumer(topics, group_id, handler, should_stop, heartbeat_file=None, re
                 continue
 
             close_old_connections()  # long-running process: drop connections the DB has closed
+            token = correlation_id.set(str(event.get("correlation_id") or event.get("event_id") or "") or None)
             try:
                 handler(event)
             except Exception:
@@ -135,6 +143,8 @@ def run_consumer(topics, group_id, handler, should_stop, heartbeat_file=None, re
                 consumer.seek(TopicPartition(msg.topic(), msg.partition(), msg.offset()))
                 time.sleep(retry_delay)
                 continue
+            finally:
+                correlation_id.reset(token)
             try:
                 consumer.commit(message=msg, asynchronous=False)
             except KafkaException as exc:

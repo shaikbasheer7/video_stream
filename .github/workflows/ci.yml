@@ -40,6 +40,13 @@ jobs:
         env:
           DJANGO_SETTINGS_MODULE: config.settings.test
       - run: pytest -q
+      - name: Production settings pass Django's deploy checks
+        run: |
+          DJANGO_SECRET_KEY=$(python -c 'import secrets; print(secrets.token_urlsafe(50))') \
+            python manage.py check --deploy --fail-level WARNING
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.prod
+          DJANGO_ALLOWED_HOSTS: example.com
 
   worker:
     runs-on: ubuntu-latest
@@ -82,17 +89,26 @@ jobs:
       - name: Local CDN cookie verifier
         working-directory: infra/local-cdn
         run: |
-          pip install boto3==1.40.0 cryptography==45.0.7 pytest==8.4.2
+          pip install boto3==1.40.0 cryptography==50.0.2 pytest==9.0.3
           pytest -q -p no:cacheprovider
+      - name: Deploy scripts (render_env tests, shellcheck)
+        run: |
+          pip install pytest==9.0.3
+          pytest -q -p no:cacheprovider deploy/tests
+          shellcheck deploy/deploy.sh deploy/ci-deploy.sh infra/terraform/check.sh backend/docker-entrypoint.sh
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.8
-      - name: Terraform (media)
-        working-directory: infra/terraform/media
-        run: |
-          terraform fmt -check
-          terraform init -backend=false -input=false
-          terraform validate
+      - name: Terraform (fmt + validate every root and module, no AWS access)
+        working-directory: infra/terraform
+        run: sh check.sh
+      - name: Terraform security scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: infra/terraform
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: "1"
 
   frontend:
     runs-on: ubuntu-latest
@@ -111,31 +127,40 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+  # Build every image and scan it. Fails on fixable CRITICAL/HIGH vulnerabilities.
   images:
     runs-on: ubuntu-latest
     needs: [backend, worker, infra, frontend]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            context: backend
+            file: backend/Dockerfile
+          - name: encoder
+            context: worker
+            file: worker/Dockerfile
+          - name: web
+            context: .
+            file: frontend/Dockerfile
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - name: Build backend image
+      - name: Build ${{ matrix.name }} image
         uses: docker/build-push-action@v6
         with:
-          context: backend
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: Build encoder image
-        uses: docker/build-push-action@v6
+          load: true
+          tags: streaming-${{ matrix.name }}:ci
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+      - name: Scan ${{ matrix.name }} image
+        uses: aquasecurity/trivy-action@0.28.0
         with:
-          context: worker
-          push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: Build nginx + frontend image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: frontend/Dockerfile
-          push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          image-ref: streaming-${{ matrix.name }}:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"

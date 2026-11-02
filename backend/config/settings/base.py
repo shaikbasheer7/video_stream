@@ -37,6 +37,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "common.logs.RequestIdMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
@@ -111,6 +112,9 @@ REST_FRAMEWORK = {
         "upload": os.environ.get("UPLOAD_THROTTLE_RATE", "30/hour"),
         "events": os.environ.get("EVENTS_THROTTLE_RATE", "120/min"),
     },
+    # Django always sits behind nginx, which puts the real client IP last in X-Forwarded-For;
+    # throttles key on it instead of nginx's own address.
+    "NUM_PROXIES": 1,
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 20,
 }
@@ -166,12 +170,46 @@ MONGO_DB = os.environ.get("MONGO_DB", "streaming")
 EVENTS_TTL_DAYS = int(os.environ.get("EVENTS_TTL_DAYS", 90))
 
 KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:29092")
+KAFKA_SECURITY_PROTOCOL = os.environ.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")  # SSL on AWS MSK
+KAFKA_SSL_CA_LOCATION = os.environ.get("KAFKA_SSL_CA_LOCATION", "probe")  # system CA bundle
 KAFKA_TOPIC_PARTITIONS = int(os.environ.get("KAFKA_TOPIC_PARTITIONS", 6))
 KAFKA_REPLICATION_FACTOR = int(os.environ.get("KAFKA_REPLICATION_FACTOR", 1))
 
+# JSON lines by default (CloudWatch Logs); LOG_FORMAT=text for readable local output.
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
-    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "filters": {"correlation": {"()": "common.logs.CorrelationIdFilter"}},
+    "formatters": {
+        "json": {"()": "common.logs.JsonFormatter"},
+        "text": {"format": "%(asctime)s %(levelname)s %(name)s [%(correlation_id)s] %(message)s"},
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": os.environ.get("LOG_FORMAT", "json"),
+            "filters": ["correlation"],
+        }
+    },
     "root": {"handlers": ["console"], "level": os.environ.get("LOG_LEVEL", "INFO")},
+    "loggers": {
+        # nginx writes the access log; Django's own request log would duplicate it.
+        "django.server": {"level": "WARNING"},
+        # Noisy at INFO (e.g. "Found credentials in environment variables").
+        "botocore": {"level": "WARNING"},
+        "pymongo": {"level": "WARNING"},
+    },
 }
+
+# Error tracking: enabled only when SENTRY_DSN is set.
+SENTRY_DSN = os.environ.get("SENTRY_DSN", "")
+if SENTRY_DSN:
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment=os.environ.get("SENTRY_ENVIRONMENT", "development"),
+        release=os.environ.get("GIT_SHA") or None,
+        traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", 0.05)),
+        send_default_pii=False,  # no emails/IPs in error reports
+    )
