@@ -103,7 +103,7 @@ jobs:
         working-directory: infra/terraform
         run: sh check.sh
       - name: Terraform security scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           scan-ref: infra/terraform
@@ -187,7 +187,7 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
       - name: Scan ${{ matrix.name }} image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: streaming-${{ matrix.name }}:ci
           severity: CRITICAL,HIGH
