@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Build context is the repo root (needs frontend/ and infra/nginx/).
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
