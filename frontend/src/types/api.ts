@@ -63,6 +63,16 @@ export interface Video {
   // Only on GET /videos/{id}/ for logged-in viewers.
   is_following?: boolean;
   resume_position_sec?: number | null;
+  // Only on GET /videos/{id}/: the ML worker's results, empty until it has analysed the video.
+  tags?: string[];
+  subtitles?: Subtitles[];
+  // Only on GET /search/: what is said in the video, with the matches between [[ and ]].
+  snippet?: string | null;
+}
+
+export interface Subtitles {
+  language: string;
+  url: string;
 }
 
 export interface AppNotification {

@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import type { Video } from '../../types/api';
-import { formatDuration } from './format';
+import { formatDuration, snippetParts } from './format';
 
 export default function VideoGrid({ videos }: { videos: Video[] }) {
   return (
@@ -14,6 +14,13 @@ export default function VideoGrid({ videos }: { videos: Video[] }) {
             </div>
             <strong>{video.title}</strong>
             <span className="muted small">{video.owner}</span>
+            {video.snippet && (
+              <span className="muted small snippet">
+                {snippetParts(video.snippet).map((part, index) =>
+                  part.match ? <mark key={index}>{part.text}</mark> : part.text,
+                )}
+              </span>
+            )}
           </Link>
         </li>
       ))}

@@ -1,3 +1,4 @@
 -r requirements.txt
+numpy==2.5.4  # for the ML worker's pure logic; its models are tested in the ML image
 pytest==9.0.3
 ruff==0.14.0

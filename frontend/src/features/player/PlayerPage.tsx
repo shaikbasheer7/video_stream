@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../app/store';
-import { formatDuration } from '../videos/format';
+import { formatDuration, searchPath } from '../videos/format';
 import VideoGrid from '../videos/VideoGrid';
 import { followRequested, similarRequested, videoRequested } from '../videos/videosSlice';
 import HlsPlayer from './HlsPlayer';
@@ -59,6 +59,7 @@ export default function PlayerPage() {
             startPosition={resumeAt}
             sessionKey={video.playback.expires_at}
             onAccessExpired={renewAccess}
+            subtitles={video.subtitles}
           />
         ) : (
           <div className="player-placeholder">
@@ -98,6 +99,17 @@ export default function PlayerPage() {
         )}
       </div>
       {video.description && <p className="description">{video.description}</p>}
+      {video.tags && video.tags.length > 0 && (
+        <ul className="tag-list" aria-label="Tags">
+          {video.tags.map((tag) => (
+            <li key={tag}>
+              <Link to={searchPath(tag)} className="tag">
+                {tag}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
       {similar?.videoId === id && similar.items.length > 0 && (
         <section className="similar">
           <h2>{similar.source === 'similar' ? 'Similar videos' : 'Trending'}</h2>

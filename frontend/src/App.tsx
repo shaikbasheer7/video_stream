@@ -10,6 +10,7 @@ import UploadPage from './features/upload/UploadPage';
 import BrowsePage from './features/videos/BrowsePage';
 import FeedPage from './features/videos/FeedPage';
 import LibraryPage from './features/videos/LibraryPage';
+import SearchPage from './features/videos/SearchPage';
 
 // hls.js is large; load it only when someone opens a video.
 const PlayerPage = lazy(() => import('./features/player/PlayerPage'));
@@ -26,6 +27,7 @@ export default function App() {
       <Route element={<Layout />}>
         {/* Public: anyone can browse and watch ready videos. */}
         <Route path="/" element={<BrowsePage />} />
+        <Route path="/search" element={<SearchPage />} />
         <Route
           path="/watch/:id"
           element={

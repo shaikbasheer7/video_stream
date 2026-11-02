@@ -20,6 +20,9 @@ Built phase by phase from the *Video Streaming Platform – MVP Blueprint*.
   tables, and three Superset dashboards defined in code. See [Analytics](#analytics).
 - **Phase 8 (recommendations), done locally:** trending and popular lists, similar videos and personal picks,
   precomputed nightly. See [Recommendations](#recommendations). Collaborative filtering (step 51) is deferred.
+- **Phase 9 (video intelligence), done locally:** an optional ML worker writes Whisper subtitles and CLIP tags,
+  moderation flags and a better thumbnail, and search covers titles, tags and speech.
+  See [Video intelligence](#video-intelligence).
 
 ## Quick start
 
@@ -255,15 +258,69 @@ Needs the data stack running to refresh; the API keeps serving the last results 
   matched against videos they haven't started and didn't upload.
 - **Fresh enough:** deleted videos drop out immediately. A new video has no similar list or picks until the next
   nightly run.
+- **What gets embedded:** title, description, topic tags, then the start of the transcript, so a video is
+  re-embedded the night after the ML worker analyses it. Moderation flags are left out.
 - **Known limit:** short titles give the model little to go on. On 24 hand-labelled titles, the cutoff of 0.2 kept
   41% of same-topic pairs and let through 4% of different-topic ones. So some related videos aren't linked (they
-  get trending instead), and the occasional wrong match is possible. Re-measure when Phase 9 adds transcripts and
-  tags (see `data/pipeline/recommend.py`).
+  get trending instead), and the occasional wrong match is possible. See `data/pipeline/recommend.py`.
 - **Refresh by hand:**
 
   ```sh
   docker compose --profile data exec airflow python -m pipeline.run --from 2026-11-01 --recommendations
   ```
+
+## Video intelligence
+
+An optional worker that consumes `video.ready`. Videos play with or without it, and search still covers titles and
+descriptions. It isn't part of the AWS Terraform yet.
+
+```sh
+# In .env, set ML_WORKER_DB_PASSWORD. Once set, the monitor expects the worker to be consuming.
+docker compose --profile ml up -d --build
+```
+
+On first start it works through every `video.ready` still on Kafka, so existing videos get analysed too.
+
+| Output | Where | Who sees it |
+|---|---|---|
+| Subtitles (WebVTT) | S3, `hls/{id}/subtitles/{language}.vtt`, behind the same signed cookies as the video | Viewers, off by default |
+| Transcript | `video_transcripts` | Search, with the spoken match highlighted |
+| Topic tags | `video_tags`, `kind = topic` | Watch page and search |
+| Moderation flags | `video_tags`, `kind = moderation` | Staff only: filter by kind at `/admin/intelligence/videotag/` |
+| Thumbnail | Replaces `thumbnails/{id}/default.jpg` | Everyone |
+
+- **Search:** `GET /api/search/?q=...` uses PostgreSQL full-text search over ready videos: title, then description,
+  tags and speech, in that order of weight. It supports `"exact phrases"`, `or` and `-excluded`. The document is built
+  per query, which suits an MVP catalogue. A stored `tsvector` with a GIN index is the next step as it grows.
+- **Flags only queue a video for review.** They never hide it, and viewers can't see or search them. A flagged video
+  keeps the encoder's thumbnail.
+- **Failures:** two attempts, then `video.ready.ml.dlq`. Such a video simply has no analysis.
+
+**Measured** with the real models on 2 CPU cores and a 3 GB limit, November 2026:
+
+- **Speech (Whisper `base`):** a 203-second lecture took 16 seconds (13× real time), and an 11-second speech came out
+  word for word. Noise, silence, a tone and a synthetic chord produced no text at all. Peak memory was about 1 GB.
+- **Topics (CLIP):** of 16 photos held out from the first round of tuning, 13 got the right tag, 2 got none and 1 got a
+  wrong one (a group of people became `education`). Ordinary objects mostly get no tag, but a pair of shoes became
+  `cooking`.
+- **Moderation:** the first labels flagged food and a piano as `nudity`, so food and object labels were added. Now
+  none of 33 harmless photos is flagged and a photo of a rifle still is. A video is flagged on its worst frame, so
+  more frames mean more chances of a false alarm.
+- **Thumbnails:** eight bad frames (black, white, grey, test card, dark, faded, blurred, washed out) scored at most
+  0.07 and 79% of 34 real photos cleared the cutoff of 0.1. A lecture opening on black got a real frame instead.
+
+**Known limits:**
+
+- **Moderation is largely unproven.** It was only tested for false alarms and on one weapon photo. Nudity and violence
+  were never tested on real examples. Don't rely on it to catch anything: human review and a purpose-built service
+  are needed before this handles public uploads. One photo (the shoes) sits just under the flag cutoff, at 0.699.
+- **The photo sets are small, and the moderation labels were tuned on all 33 harmless photos,** so its false-alarm
+  figure is optimistic.
+- **Thumbnails come from the lowest rendition** and replace the encoder's at the same key, so a browser that cached
+  the old one shows it until the cache expires.
+- **Long videos:** only the first hour is transcribed (`ML_MAX_TRANSCRIBE_SEC`).
+- **Similar videos:** the 0.2 cutoff was measured on titles, not on text that includes speech, so it needs measuring
+  again once there are real videos with speech.
 
 ## Operations
 
@@ -359,6 +416,8 @@ Vitest, then builds both Docker images.
 - **`fastembed` instead of `sentence-transformers`:** same model, without PyTorch's memory and image size.
 - **Collaborative filtering and MLflow (step 51) aren't built yet.** The blueprint says to wait for a few thousand
   users with real watch history, because on sparse data it does worse than popularity.
+- **`faster-whisper` and `fastembed` instead of PyTorch Whisper and CLIP:** the same models through CTranslate2 and
+  ONNX, on a CPU, with a much smaller image and memory use. The blueprint suggests a GPU only once volume grows.
 
 ## Deployment (AWS)
 
@@ -384,4 +443,4 @@ Checks that run without AWS: `sh infra/terraform/check.sh` (fmt + validate), Tri
 
 - **Apply Part B to a real AWS account:** needs your go-ahead and credentials. It costs money (see the
   runbook).
-- **Phase 9:** video intelligence (Whisper transcripts and subtitles, CLIP tags and moderation, search).
+- **Phase 10:** big data and real time (Kafka Connect to an S3 Parquet lake, PySpark jobs, Flink metrics).

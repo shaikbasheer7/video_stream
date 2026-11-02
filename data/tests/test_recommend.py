@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from pipeline.embeddings import changed_videos, text_hash, video_text
+from pipeline.embeddings import MAX_TRANSCRIPT_CHARS, changed_videos, text_hash, video_text
 from pipeline.recommend import recommend_for_user, similar_videos
 
 # Hand-made "embeddings": cooking videos point one way, programming another.
@@ -67,7 +67,22 @@ def test_video_text(title, description, expected):
     assert video_text(title, description) == expected
 
 
+def test_video_text_adds_tags_and_a_capped_transcript_after_what_the_uploader_wrote():
+    assert video_text("T", "D", ["animals", "nature"], "Hello") == "T. D. animals, nature. Hello"
+    assert video_text("T", "", (), "x" * 5000) == "T. " + "x" * MAX_TRANSCRIPT_CHARS
+
+
 def test_only_new_or_edited_videos_are_re_embedded():
     stored = {"same": text_hash("Title. Text"), "edited": text_hash("old title")}
-    videos = [("same", "Title", "Text"), ("edited", "new title", None), ("new", "brand new", "")]
+    videos = [
+        ("same", "Title", "Text", [], ""),
+        ("edited", "new title", None, [], ""),
+        ("new", "brand new", "", [], ""),
+    ]
     assert [c[0] for c in changed_videos(videos, stored)] == ["edited", "new"]
+
+
+def test_a_video_is_re_embedded_once_it_has_been_analysed():
+    stored = {"v": text_hash("Title")}
+    assert changed_videos([("v", "Title", "", [], "")], stored) == []
+    assert [c[0] for c in changed_videos([("v", "Title", "", ["animals"], "")], stored)] == ["v"]

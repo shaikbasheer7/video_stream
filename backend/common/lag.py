@@ -2,6 +2,7 @@
 
 from confluent_kafka import Consumer, ConsumerGroupTopicPartitions, TopicPartition
 from confluent_kafka.admin import AdminClient
+from django.conf import settings
 
 from . import kafka
 
@@ -13,6 +14,7 @@ GROUPS = {
     "notify": [kafka.VIDEO_READY, kafka.VIDEO_FAILED],
     "feed": [kafka.VIDEO_READY],
 }
+DLQ_TOPICS = [kafka.VIDEO_UPLOADED_DLQ, kafka.VIDEO_READY_ML_DLQ]
 NO_OFFSET = -1001  # librdkafka OFFSET_INVALID: the group hasn't committed on this partition yet
 
 
@@ -49,12 +51,14 @@ class KafkaInspector:
         return {(tp.topic, tp.partition): tp.offset for tp in result.topic_partitions}
 
     def snapshot(self):
-        """{"lag": {group: messages waiting}, "dlq_messages": total in video.uploaded.dlq}."""
+        """{"lag": {group: messages waiting}, "dlq_messages": total in the dead-letter topics}."""
         lag = {}
-        for group, topics in GROUPS.items():
+        # The ML worker is optional (Compose profile `ml`): without it, its group would only ever show a growing lag.
+        groups = {**GROUPS, "ml": [kafka.VIDEO_READY]} if settings.ML_WORKER_DB_PASSWORD else GROUPS
+        for group, topics in groups.items():
             partitions = self.partitions(topics)
             lag[group] = compute_lag(partitions, self.committed(group, partitions), self.watermarks(partitions))
-        dlq_partitions = self.partitions([kafka.VIDEO_UPLOADED_DLQ])
+        dlq_partitions = self.partitions(DLQ_TOPICS)
         dlq = sum(high - low for low, high in self.watermarks(dlq_partitions).values())
         return {"lag": lag, "dlq_messages": dlq}
 

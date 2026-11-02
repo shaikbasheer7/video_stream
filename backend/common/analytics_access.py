@@ -17,6 +17,7 @@ TABLES = ["daily_video_stats", "daily_video_retention", "daily_streaming_quality
 VIEWS = ["analytics_video_stats", "analytics_video_retention"]
 # Written only by the pipeline. Superset doesn't get these: per-user recommendations aren't BI data.
 RECOMMENDATION_TABLES = ["video_embeddings", "ranked_videos", "similar_videos", "recommendations"]
+ML_TABLES = ["video_tags", "video_transcripts"]
 METADATA_DATABASES = ["airflow", "superset"]
 
 
@@ -49,6 +50,14 @@ def ensure_analytics_access():
         _grant(cursor, "SELECT, INSERT, DELETE", TABLES + RECOMMENDATION_TABLES, "analytics_etl")
         _grant(cursor, "SELECT", ["videos_video"], "analytics_etl")
 
+        # The embeddings include tags and transcripts.
+        _grant(cursor, "SELECT", ML_TABLES, "analytics_etl")
+
         _ensure_role(cursor, "analytics_ro", settings.ANALYTICS_RO_PASSWORD)
         _grant(cursor, "SELECT", TABLES + VIEWS, "analytics_ro")
+
+        if settings.ML_WORKER_DB_PASSWORD:
+            _ensure_role(cursor, "ml_worker", settings.ML_WORKER_DB_PASSWORD)
+            _grant(cursor, "SELECT, INSERT, DELETE", ML_TABLES, "ml_worker")
+            _grant(cursor, "SELECT", ["videos_video"], "ml_worker")
     return True

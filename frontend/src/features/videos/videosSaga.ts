@@ -10,6 +10,9 @@ import {
   recommendationsRequested,
   similarLoaded,
   similarRequested,
+  searchFailed,
+  searchLoaded,
+  searchRequested,
   type RecommendationSource,
   feedLoaded,
   feedRequested,
@@ -67,6 +70,15 @@ function* fetchSimilar(action: PayloadAction<string>) {
   }
 }
 
+function* fetchSearch(action: PayloadAction<string>) {
+  try {
+    const { data }: { data: { results: Video[] } } = yield call(api.get, '/search/', { params: { q: action.payload } });
+    yield put(searchLoaded(data.results));
+  } catch (error) {
+    yield put(searchFailed(errorMessage(error)));
+  }
+}
+
 function* fetchFeed() {
   try {
     const { data }: { data: { results: Video[] } } = yield call(api.get, '/feed/');
@@ -119,6 +131,7 @@ export default function* videosSaga() {
   yield takeLatest(browseRequested.type, fetchBrowse);
   yield takeLatest(recommendationsRequested.type, fetchRecommendations);
   yield takeLatest(similarRequested.type, fetchSimilar);
+  yield takeLatest(searchRequested.type, fetchSearch);
   yield takeLatest(feedRequested.type, fetchFeed);
   yield takeLatest(followRequested.type, changeFollow);
   yield takeLatest(myVideosRequested.type, fetchMyVideos);

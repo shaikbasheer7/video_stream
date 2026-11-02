@@ -146,6 +146,29 @@ services:
           memory: 2g
     stop_grace_period: 30s
 
+  # ---------- ML worker (optional, heavy): docker compose --profile ml up -d ----------
+  # video.ready -> subtitles in S3, transcript and tags in Postgres. Videos play with or without it.
+  ml-worker:
+    profiles: [ml]
+    build:
+      context: ./worker
+      dockerfile: ml.Dockerfile
+    env_file: .env
+    environment:
+      <<: *backend-env-vars
+      SERVICE_NAME: ml-worker
+      POSTGRES_USER: ml_worker
+      POSTGRES_PASSWORD: ${ML_WORKER_DB_PASSWORD}
+    depends_on:
+      django:
+        condition: service_healthy  # migrations, the ml_worker role and the topics exist
+    deploy:
+      resources:
+        limits:
+          cpus: "2"  # keep speech recognition from starving the API
+          memory: 3g
+    stop_grace_period: 30s
+
   # ---------- Data stack (optional, heavy): docker compose --profile data up -d ----------
   # Both bind to 127.0.0.1 only: local tools with convenience logins.
 

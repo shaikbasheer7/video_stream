@@ -1,7 +1,9 @@
 import Hls, { ErrorTypes, Events } from 'hls.js';
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { useAppDispatch, useAppSelector } from '../../app/store';
+import type { Subtitles } from '../../types/api';
 import { playbackEvent } from '../events/eventsSaga';
+import { languageName } from '../videos/format';
 import { PlaybackTracker } from '../events/tracker';
 import {
   AUTO,
@@ -24,13 +26,14 @@ interface Props {
   sessionKey: string;
   /** Called when the CDN answers 403: the cookies expired. Re-fetching the video renews them. */
   onAccessExpired: () => void;
+  subtitles?: Subtitles[];
 }
 
 const MAX_MEDIA_RECOVERIES = 2;
 
 /** The forwarded ref is the <video> element, so the page can control it (e.g. "Start over"). */
 const HlsPlayer = forwardRef<HTMLVideoElement, Props>(function HlsPlayer(
-  { videoId, src, poster, startPosition, sessionKey, onAccessExpired },
+  { videoId, src, poster, startPosition, sessionKey, onAccessExpired, subtitles = [] },
   forwardedRef,
 ) {
   const dispatch = useAppDispatch();
@@ -166,6 +169,8 @@ const HlsPlayer = forwardRef<HTMLVideoElement, Props>(function HlsPlayer(
       controls
       playsInline
       poster={poster ?? undefined}
+      // Subtitle files are behind the CDN cookies, and the CDN may be another origin.
+      crossOrigin={subtitles.length ? 'use-credentials' : undefined}
       onPlay={(e) => tracker()?.onPlay(e.currentTarget.currentTime)}
       onPause={(e) => tracker()?.onPause(e.currentTarget.currentTime, e.currentTarget.ended)}
       onSeeking={() => tracker()?.onSeeking()}
@@ -187,7 +192,17 @@ const HlsPlayer = forwardRef<HTMLVideoElement, Props>(function HlsPlayer(
           dispatch(positionUpdated(second));
         }
       }}
-    />
+    >
+      {subtitles.map((track) => (
+        <track
+          key={track.url}
+          kind="subtitles"
+          src={track.url}
+          srcLang={track.language}
+          label={languageName(track.language)}
+        />
+      ))}
+    </video>
   );
 });
 

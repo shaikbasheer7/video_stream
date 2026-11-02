@@ -1,0 +1,5 @@
+-r requirements.txt
+# faster-whisper 1.2.1 asks for av>=11 but breaks on av 16, which removed an argument it passes to av.open().
+av==15.1.0
+fastembed==0.9.1
+faster-whisper==1.2.1

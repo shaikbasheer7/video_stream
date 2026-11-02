@@ -144,6 +144,21 @@ select {
 .similar { margin-top: 24px; }
 
 .watch-meta { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.search-box { margin-right: 16px; box-sizing: border-box; }
+.search-box input { box-sizing: border-box; width: 260px; padding: 7px 12px; }
+@media (max-width: 560px) {
+  .search-box { order: 4; width: 100%; margin-right: 0; }
+  .search-box input { width: 100%; }
+}
+.snippet { overflow-wrap: anywhere; }
+.snippet mark { background: none; color: var(--text); font-weight: 600; }
+.tag-list { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.tag {
+  display: inline-block; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border);
+  color: var(--muted); font-size: 0.85rem; text-decoration: none;
+}
+.tag:hover { color: var(--text); }
+
 .resume-chip { margin: 0; color: var(--muted); }
 .link-button { background: none; border: none; padding: 0; color: var(--accent); font-weight: 600; cursor: pointer; }
 .link-button:hover { text-decoration: underline; }

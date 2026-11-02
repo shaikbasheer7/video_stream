@@ -103,7 +103,7 @@ jobs:
         working-directory: infra/terraform
         run: sh check.sh
       - name: Terraform security scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: config
           scan-ref: infra/terraform
@@ -170,6 +170,9 @@ jobs:
           - name: encoder
             context: worker
             file: worker/Dockerfile
+          - name: ml
+            context: worker
+            file: worker/ml.Dockerfile
           - name: web
             context: .
             file: frontend/Dockerfile
@@ -187,7 +190,7 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
       - name: Scan ${{ matrix.name }} image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: streaming-${{ matrix.name }}:ci
           severity: CRITICAL,HIGH

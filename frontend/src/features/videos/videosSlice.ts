@@ -18,6 +18,7 @@ export interface VideosState {
   currentLoading: boolean;
   currentError: string | null;
   error: string | null;
+  search: { query: string; results: Video[]; loading: boolean; error: string | null };
 }
 
 const initialState: VideosState = {
@@ -35,6 +36,7 @@ const initialState: VideosState = {
   currentLoading: false,
   currentError: null,
   error: null,
+  search: { query: '', results: [], loading: false, error: null },
 };
 
 const videosSlice = createSlice({
@@ -63,6 +65,20 @@ const videosSlice = createSlice({
     },
     similarLoaded(state, action: PayloadAction<VideosState['similar']>) {
       state.similar = action.payload;
+    },
+    searchRequested(state, action: PayloadAction<string>) {
+      // Never shows the results of the previous words under the new ones.
+      const results = state.search.query === action.payload ? state.search.results : [];
+      state.search = { query: action.payload, results, loading: true, error: null };
+    },
+    searchLoaded(state, action: PayloadAction<Video[]>) {
+      state.search.results = action.payload;
+      state.search.loading = false;
+    },
+    searchFailed(state, action: PayloadAction<string>) {
+      state.search.results = [];
+      state.search.loading = false;
+      state.search.error = action.payload;
     },
     feedRequested(state) {
       state.feedLoading = true;
@@ -115,6 +131,7 @@ const videosSlice = createSlice({
     videoDeleted(state, action: PayloadAction<string>) {
       state.mine = state.mine.filter((v) => v.id !== action.payload);
       state.browse = state.browse.filter((v) => v.id !== action.payload);
+      state.search.results = state.search.results.filter((v) => v.id !== action.payload);
     },
   },
 });
@@ -126,6 +143,9 @@ export const {
   recommendationsLoaded,
   similarRequested,
   similarLoaded,
+  searchRequested,
+  searchLoaded,
+  searchFailed,
   feedRequested,
   feedLoaded,
   followRequested,

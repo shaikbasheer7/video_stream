@@ -145,8 +145,8 @@ def run_while_polling(consumer, fn):
         consumer.resume(consumer.assignment())
 
 
-def main():
-    logs.configure()
+def consume(topic, group_id, handle):
+    """At-least-once loop, shared with the ML worker: handle(event) runs while the consumer keeps polling."""
     stopping = False
 
     def stop(*_):
@@ -158,13 +158,10 @@ def main():
     signal.signal(signal.SIGINT, stop)
 
     consumer = Consumer(
-        config.kafka_config(
-            **{"group.id": config.GROUP_ID, "enable.auto.commit": False, "auto.offset.reset": "earliest"}
-        )
+        config.kafka_config(**{"group.id": group_id, "enable.auto.commit": False, "auto.offset.reset": "earliest"})
     )
-    consumer.subscribe([messaging.VIDEO_UPLOADED])
-    job = EncodeJob(Database())
-    logger.info("encoder consuming %s as group %s", messaging.VIDEO_UPLOADED, config.GROUP_ID)
+    consumer.subscribe([topic])
+    logger.info("consuming %s as group %s", topic, group_id)
 
     try:
         while not stopping:
@@ -186,7 +183,7 @@ def main():
 
             token = logs.correlation_id.set(event.get("correlation_id") or event.get("event_id"))
             try:
-                run_while_polling(consumer, lambda event=event: job.handle(event))
+                run_while_polling(consumer, lambda event=event: handle(event))
             except Exception:
                 # Couldn't even record the outcome (DB/Kafka down): leave uncommitted and retry the message.
                 logger.exception("video %s: could not be handled, will retry", event.get("video_id"))
@@ -203,6 +200,11 @@ def main():
                 logger.warning("commit failed: %s", exc)
     finally:
         consumer.close()
+
+
+def main():
+    logs.configure()
+    consume(messaging.VIDEO_UPLOADED, config.GROUP_ID, EncodeJob(Database()).handle)
 
 
 if __name__ == "__main__":

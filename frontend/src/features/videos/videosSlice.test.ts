@@ -1,8 +1,35 @@
 import { describe, expect, it } from 'vitest';
 import type { Video } from '../../types/api';
-import reducer, { similarLoaded, similarRequested, videoLoaded, videoRequested } from './videosSlice';
+import reducer, {
+  searchFailed,
+  searchLoaded,
+  searchRequested,
+  similarLoaded,
+  similarRequested,
+  videoDeleted,
+  videoLoaded,
+  videoRequested,
+} from './videosSlice';
 
 const video = (id: string, resume: number | null | undefined) => ({ id, resume_position_sec: resume }) as Video;
+
+describe('videosSlice search', () => {
+  const loaded = () => reducer(reducer(undefined, searchRequested('cats')), searchLoaded([video('a', null)]));
+
+  it('keeps results while the same words are searched again, and clears them for new words', () => {
+    expect(reducer(loaded(), searchRequested('cats')).search.results).toHaveLength(1);
+    expect(reducer(loaded(), searchRequested('dogs')).search.results).toEqual([]);
+  });
+
+  it('reports a failure without leaving old results or a spinner', () => {
+    const { search } = reducer(loaded(), searchFailed('Network error'));
+    expect(search).toMatchObject({ results: [], loading: false, error: 'Network error' });
+  });
+
+  it('drops a deleted video from the results', () => {
+    expect(reducer(loaded(), videoDeleted('a')).search.results).toEqual([]);
+  });
+});
 
 describe('videosSlice similar videos', () => {
   it("never keeps showing the previous video's list while the next one loads", () => {

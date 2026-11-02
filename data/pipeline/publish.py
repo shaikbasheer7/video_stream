@@ -51,10 +51,17 @@ def refresh_ranked_lists(day):
 
 
 def _ready_videos(conn):
-    return [
-        (str(r[0]), r[1], r[2])
-        for r in conn.execute("SELECT id, title, description FROM videos_video WHERE status = 'ready'").fetchall()
-    ]
+    """With what the ML worker found, if it ran. Moderation flags are for reviewers, not for matching videos."""
+    rows = conn.execute(
+        """SELECT v.id, v.title, v.description,
+                  ARRAY(SELECT t.tag FROM video_tags t
+                         WHERE t.video_id = v.id AND t.kind = 'topic' ORDER BY t.tag),
+                  COALESCE(tr.text, '')
+             FROM videos_video v
+             LEFT JOIN video_transcripts tr ON tr.video_id = v.id
+            WHERE v.status = 'ready'"""
+    ).fetchall()
+    return [(str(r[0]), r[1], r[2], r[3], r[4]) for r in rows]
 
 
 def refresh_embeddings():
@@ -66,7 +73,7 @@ def refresh_embeddings():
     vectors = embeddings.embed([text for _, text, _ in changed]) if changed else []
 
     now = datetime.now(UTC)
-    current = {video_id for video_id, _, _ in videos}
+    current = {video[0] for video in videos}
     with io.postgres() as conn, conn.cursor() as cur:
         gone = [video_id for video_id in stored if video_id not in current]
         replaced = [video_id for video_id, _, _ in changed]

@@ -21,6 +21,16 @@ from .serializers import CompleteSerializer, VideoCreateSerializer, VideoSeriali
 logger = logging.getLogger(__name__)
 
 
+def analysis_fields(video):
+    """The ML worker's public results, on the detail page only. Moderation flags are for reviewers, never shown here."""
+    tags = video.tags.filter(kind="topic").values_list("tag", flat=True)
+    transcript = getattr(video, "transcript", None)
+    subtitles = []
+    if transcript and transcript.subtitles_key:
+        subtitles.append({"language": transcript.language, "url": playback.cdn_url(transcript.subtitles_key)})
+    return {"tags": list(tags), "subtitles": subtitles}
+
+
 def unavailable():
     return Response({"detail": "Storage or messaging is unavailable. Try again shortly."}, status=503)
 
@@ -63,6 +73,7 @@ class VideoViewSet(
         response = Response(VideoSerializer(video, context={"request": request}).data)
         if video.status == Video.Status.READY:
             response.data["playback"] = playback.grant_playback(response, video)
+        response.data.update(analysis_fields(video))
         user = request.user
         if user.is_authenticated:
             response.data["is_following"] = Follow.objects.filter(follower=user, followee_id=video.owner_id).exists()

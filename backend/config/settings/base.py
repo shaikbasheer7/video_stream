@@ -25,6 +25,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django.contrib.postgres",
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
@@ -36,6 +37,7 @@ INSTALLED_APPS = [
     "social",
     "analytics",
     "recommendations",
+    "intelligence",
 ]
 
 MIDDLEWARE = [
@@ -113,6 +115,7 @@ REST_FRAMEWORK = {
         "auth": os.environ.get("AUTH_THROTTLE_RATE", "10/min"),
         "upload": os.environ.get("UPLOAD_THROTTLE_RATE", "30/hour"),
         "events": os.environ.get("EVENTS_THROTTLE_RATE", "120/min"),
+        "search": os.environ.get("SEARCH_THROTTLE_RATE", "60/min"),
     },
     # Django always sits behind nginx, which puts the real client IP last in X-Forwarded-For;
     # throttles key on it instead of nginx's own address.
@@ -174,6 +177,7 @@ EVENTS_TTL_DAYS = int(os.environ.get("EVENTS_TTL_DAYS", 90))
 # Data stack (Airflow + Superset). Roles are only created when these are set (see common/analytics_access.py).
 ANALYTICS_ETL_PASSWORD = os.environ.get("ANALYTICS_ETL_PASSWORD", "")
 ANALYTICS_RO_PASSWORD = os.environ.get("ANALYTICS_RO_PASSWORD", "")
+ML_WORKER_DB_PASSWORD = os.environ.get("ML_WORKER_DB_PASSWORD", "")
 
 KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:29092")
 KAFKA_SECURITY_PROTOCOL = os.environ.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")  # SSL on AWS MSK

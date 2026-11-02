@@ -2,6 +2,7 @@ import { Link, NavLink, Outlet } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../app/store';
 import { logoutRequested } from '../features/auth/authSlice';
 import NotificationBell from '../features/notifications/NotificationBell';
+import SearchBox from '../features/videos/SearchBox';
 
 export default function Layout() {
   const dispatch = useAppDispatch();
@@ -21,6 +22,7 @@ export default function Layout() {
           {user && <NavLink to="/my">My videos</NavLink>}
           {user && <NavLink to="/upload">Upload</NavLink>}
         </nav>
+        <SearchBox />
         {user ? (
           <div className="topbar-user">
             <NotificationBell />

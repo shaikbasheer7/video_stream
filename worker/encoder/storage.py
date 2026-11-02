@@ -7,9 +7,18 @@ from botocore.config import Config
 
 from . import config
 
-CONTENT_TYPES = {".m3u8": "application/vnd.apple.mpegurl", ".ts": "video/mp2t", ".jpg": "image/jpeg"}
-# Segments never change; playlists get a short TTL so a re-encode shows up quickly.
-CACHE_CONTROL = {".ts": "public, max-age=31536000, immutable", ".m3u8": "public, max-age=60"}
+CONTENT_TYPES = {
+    ".m3u8": "application/vnd.apple.mpegurl",
+    ".ts": "video/mp2t",
+    ".jpg": "image/jpeg",
+    ".vtt": "text/vtt; charset=utf-8",
+}
+# Segments never change; playlists and subtitles get a short TTL so a re-encode or re-analysis shows up quickly.
+CACHE_CONTROL = {
+    ".ts": "public, max-age=31536000, immutable",
+    ".m3u8": "public, max-age=60",
+    ".vtt": "public, max-age=60",
+}
 
 
 @cache
@@ -29,6 +38,17 @@ def client():
 
 def download(key, path):
     client().download_file(config.S3_BUCKET, key, str(path))
+
+
+def download_prefix(prefix, local_dir):
+    """Download every object under prefix into local_dir, keeping relative paths."""
+    local_dir = Path(local_dir)
+    paginator = client().get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=config.S3_BUCKET, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            target = local_dir / obj["Key"].removeprefix(prefix)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            download(obj["Key"], target)
 
 
 def upload_file(path, key):
