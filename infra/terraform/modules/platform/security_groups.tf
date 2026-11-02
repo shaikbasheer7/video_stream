@@ -55,6 +55,7 @@ resource "aws_security_group" "encoder" {
 }
 
 # Outbound for app hosts: ECR, S3, Secrets Manager, CloudWatch, SSM, MongoDB Atlas, RDS, MSK.
+#trivy:ignore:AVD-AWS-0104 AWS API addresses change, and there are no VPC endpoints to reach them privately
 resource "aws_vpc_security_group_egress_rule" "app_https" {
   for_each          = { api = aws_security_group.api.id, encoder = aws_security_group.encoder.id }
   security_group_id = each.value
@@ -65,6 +66,7 @@ resource "aws_vpc_security_group_egress_rule" "app_https" {
   to_port           = 443
 }
 
+#trivy:ignore:AVD-AWS-0104 the Atlas cluster doesn't exist yet: narrow this to its addresses once it does
 resource "aws_vpc_security_group_egress_rule" "app_mongo" {
   for_each          = { api = aws_security_group.api.id, encoder = aws_security_group.encoder.id }
   security_group_id = each.value
