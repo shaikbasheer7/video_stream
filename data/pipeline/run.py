@@ -1,4 +1,7 @@
-"""Run the pipeline without Airflow, e.g. to backfill:  python -m pipeline.run --from 2026-10-01 --to 2026-10-31"""
+"""Run the pipeline without Airflow, e.g. to backfill:  python -m pipeline.run --from 2026-10-01 --to 2026-10-31
+
+--recommendations also refreshes trending, similar videos and personal picks as of the last day.
+"""
 
 import argparse
 import logging
@@ -24,6 +27,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--from", dest="start", type=date.fromisoformat, default=yesterday)
     parser.add_argument("--to", dest="end", type=date.fromisoformat, default=None)
+    parser.add_argument("--recommendations", action="store_true")
     args = parser.parse_args()
 
     day, end = args.start, args.end or args.start
@@ -31,6 +35,10 @@ def main():
         aggregate_and_load(day)
         quality.check_day(day)
         day += timedelta(days=1)
+    if args.recommendations:
+        from . import publish  # needs the embedding model
+
+        publish.run_all(end)
 
 
 if __name__ == "__main__":

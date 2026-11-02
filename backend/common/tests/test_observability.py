@@ -114,6 +114,18 @@ def test_kafka_clients_use_tls_when_configured(settings):
     assert config["security.protocol"] == "SSL" and config["ssl.ca.location"] == "probe" and config["group.id"] == "g"
 
 
+def test_infra_commands_load_and_the_data_stack_is_optional(settings):
+    from django.core.management import load_command_class
+
+    from common.analytics_access import ensure_analytics_access
+
+    assert load_command_class("common", "ensure_infra") is not None
+    assert load_command_class("common", "run_consumer") is not None
+    assert load_command_class("common", "monitor") is not None
+    settings.ANALYTICS_ETL_PASSWORD = ""
+    assert ensure_analytics_access() is False  # AWS has no data stack yet: nothing to create
+
+
 def test_cloudwatch_metric_shape():
     data = to_metric_data({"lag": {"encoder": 3}, "dlq_messages": 1})
     assert data == [

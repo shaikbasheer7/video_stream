@@ -1,6 +1,5 @@
-"""Daily analytics: yesterday's playback events (MongoDB) -> aggregate tables (PostgreSQL) -> Superset.
-
-Later phases extend this DAG: recommendations in Phase 8, PySpark over the S3 data lake in Phase 10.
+"""Daily analytics: yesterday's playback events (MongoDB) -> aggregate tables (PostgreSQL) -> Superset, then
+trending lists, similar videos and personal picks for the API.
 
 Trigger with config {"date": "YYYY-MM-DD"} to recompute one day; re-running replaces that day.
 """
@@ -56,7 +55,43 @@ def daily_video_pipeline():
 
         return check_day(target_day())
 
-    check_new_events() >> aggregate_and_load_stats() >> data_quality_checks()
+    @task
+    def refresh_trending():
+        """SQL over the daily stats: trending (recent views) and popular (watch time)."""
+        from pipeline.publish import refresh_ranked_lists
+
+        return refresh_ranked_lists(target_day())
+
+    @task
+    def embed_videos():
+        """Only new or edited videos are embedded."""
+        from pipeline.publish import refresh_embeddings
+
+        return refresh_embeddings()
+
+    @task
+    def publish_similar_videos():
+        from pipeline.publish import publish_similar_videos as publish
+
+        return publish()
+
+    @task
+    def publish_recommendations():
+        """Top picks per user from their watch history; replaced in one transaction."""
+        from pipeline.publish import publish_recommendations as publish
+
+        return publish()
+
+    # Recommendations build on the stats, so a failed quality check stops them: yesterday's lists stay up.
+    (
+        check_new_events()
+        >> aggregate_and_load_stats()
+        >> data_quality_checks()
+        >> refresh_trending()
+        >> embed_videos()
+        >> publish_similar_videos()
+        >> publish_recommendations()
+    )
 
 
 daily_video_pipeline()

@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 TABLES = ["daily_video_stats", "daily_video_retention", "daily_streaming_quality", "daily_platform_stats"]
 VIEWS = ["analytics_video_stats", "analytics_video_retention"]
+# Written only by the pipeline. Superset doesn't get these: per-user recommendations aren't BI data.
+RECOMMENDATION_TABLES = ["video_embeddings", "ranked_videos", "similar_videos", "recommendations"]
 METADATA_DATABASES = ["airflow", "superset"]
 
 
@@ -44,7 +46,7 @@ def ensure_analytics_access():
                 logger.info("created database %s", database)
 
         _ensure_role(cursor, "analytics_etl", settings.ANALYTICS_ETL_PASSWORD)
-        _grant(cursor, "SELECT, INSERT, DELETE", TABLES, "analytics_etl")
+        _grant(cursor, "SELECT, INSERT, DELETE", TABLES + RECOMMENDATION_TABLES, "analytics_etl")
         _grant(cursor, "SELECT", ["videos_video"], "analytics_etl")
 
         _ensure_role(cursor, "analytics_ro", settings.ANALYTICS_RO_PASSWORD)

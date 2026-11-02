@@ -152,6 +152,10 @@ jobs:
         run: |
           docker build -q -f airflow/Dockerfile -t streaming-airflow:ci .
           docker build -q -f superset/Dockerfile -t streaming-superset:ci .
+      - name: Real embedding model test (the image has the model baked in)
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work --entrypoint sh streaming-airflow:ci -c \
+            "pip install -q --user pytest==9.0.3 && python -m pytest -q -p no:cacheprovider tests/test_model.py"
 
   images:
     runs-on: ubuntu-latest

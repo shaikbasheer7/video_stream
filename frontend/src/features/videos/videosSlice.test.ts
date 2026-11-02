@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import type { Video } from '../../types/api';
-import reducer, { videoLoaded, videoRequested } from './videosSlice';
+import reducer, { similarLoaded, similarRequested, videoLoaded, videoRequested } from './videosSlice';
 
 const video = (id: string, resume: number | null | undefined) => ({ id, resume_position_sec: resume }) as Video;
+
+describe('videosSlice similar videos', () => {
+  it("never keeps showing the previous video's list while the next one loads", () => {
+    const loaded = { videoId: 'a', source: 'similar' as const, items: [video('b', null)] };
+    let state = reducer(undefined, similarLoaded(loaded));
+    state = reducer(state, similarRequested('a')); // same video: keep it on screen
+    expect(state.similar).toEqual(loaded);
+    state = reducer(state, similarRequested('c'));
+    expect(state.similar).toBeNull();
+  });
+});
 
 describe('videosSlice resume position', () => {
   it('keeps the first resume position when the same video is re-fetched (cookie renewal)', () => {

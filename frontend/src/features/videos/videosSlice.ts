@@ -1,9 +1,15 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { Video } from '../../types/api';
 
+export type RecommendationSource = 'personalized' | 'trending' | 'latest';
+
 export interface VideosState {
   browse: Video[];
   browseLoading: boolean;
+  recommended: Video[];
+  recommendedSource: RecommendationSource | null;
+  trending: Video[];
+  similar: { videoId: string; source: 'similar' | 'trending'; items: Video[] } | null;
   feed: Video[];
   feedLoading: boolean;
   mine: Video[];
@@ -17,6 +23,10 @@ export interface VideosState {
 const initialState: VideosState = {
   browse: [],
   browseLoading: false,
+  recommended: [],
+  recommendedSource: null,
+  trending: [],
+  similar: null,
   feed: [],
   feedLoading: false,
   mine: [],
@@ -38,6 +48,21 @@ const videosSlice = createSlice({
     browseLoaded(state, action: PayloadAction<Video[]>) {
       state.browse = action.payload;
       state.browseLoading = false;
+    },
+    recommendationsRequested() {},
+    recommendationsLoaded(
+      state,
+      action: PayloadAction<{ source: RecommendationSource; recommended: Video[]; trending: Video[] }>,
+    ) {
+      state.recommendedSource = action.payload.source;
+      state.recommended = action.payload.recommended;
+      state.trending = action.payload.trending;
+    },
+    similarRequested(state, action: PayloadAction<string>) {
+      if (state.similar?.videoId !== action.payload) state.similar = null;
+    },
+    similarLoaded(state, action: PayloadAction<VideosState['similar']>) {
+      state.similar = action.payload;
     },
     feedRequested(state) {
       state.feedLoading = true;
@@ -97,6 +122,10 @@ const videosSlice = createSlice({
 export const {
   browseRequested,
   browseLoaded,
+  recommendationsRequested,
+  recommendationsLoaded,
+  similarRequested,
+  similarLoaded,
   feedRequested,
   feedLoaded,
   followRequested,

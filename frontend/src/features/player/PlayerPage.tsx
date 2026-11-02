@@ -2,14 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../app/store';
 import { formatDuration } from '../videos/format';
-import { followRequested, videoRequested } from '../videos/videosSlice';
+import VideoGrid from '../videos/VideoGrid';
+import { followRequested, similarRequested, videoRequested } from '../videos/videosSlice';
 import HlsPlayer from './HlsPlayer';
 import QualityMenu from './QualityMenu';
 
 export default function PlayerPage() {
   const { id = '' } = useParams();
   const dispatch = useAppDispatch();
-  const { current: video, currentLoading, currentError } = useAppSelector((s) => s.videos);
+  const { current: video, currentLoading, currentError, similar } = useAppSelector((s) => s.videos);
   const authStatus = useAppSelector((s) => s.auth.status);
   const loggedIn = authStatus === 'authenticated';
   const authSettled = authStatus === 'authenticated' || authStatus === 'anonymous';
@@ -23,6 +24,10 @@ export default function PlayerPage() {
   useEffect(() => {
     if (authSettled) dispatch(videoRequested(id));
   }, [dispatch, id, authSettled, loggedIn]);
+
+  useEffect(() => {
+    dispatch(similarRequested(id));
+  }, [dispatch, id]);
 
   if (currentError) {
     return (
@@ -93,6 +98,12 @@ export default function PlayerPage() {
         )}
       </div>
       {video.description && <p className="description">{video.description}</p>}
+      {similar?.videoId === id && similar.items.length > 0 && (
+        <section className="similar">
+          <h2>{similar.source === 'similar' ? 'Similar videos' : 'Trending'}</h2>
+          <VideoGrid videos={similar.items} />
+        </section>
+      )}
     </article>
   );
 }

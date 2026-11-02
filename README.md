@@ -18,6 +18,8 @@ Built phase by phase from the *Video Streaming Platform – MVP Blueprint*.
 
 - **Phase 7 (tracking and dashboards), done locally:** a daily Airflow pipeline from raw events to analytics
   tables, and three Superset dashboards defined in code. See [Analytics](#analytics).
+- **Phase 8 (recommendations), done locally:** trending and popular lists, similar videos and personal picks,
+  precomputed nightly. See [Recommendations](#recommendations). Collaborative filtering (step 51) is deferred.
 
 ## Quick start
 
@@ -235,6 +237,34 @@ docker compose --profile data exec airflow python -m pipeline.seed_demo --clear
 After `--clear`, recompute the same dates so the tables drop the demo numbers. The data stack isn't part of
 the AWS Terraform yet.
 
+## Recommendations
+
+Precomputed by the nightly DAG and stored in PostgreSQL; the API only reads them, so there's no live model serving.
+Needs the data stack running to refresh; the API keeps serving the last results without it.
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/recommendations/` | Personal picks if there are any, else trending, else newest. `source` says which |
+| `GET /api/recommendations/trending/` | Views over 7 days, each day counting 0.7× the next |
+| `GET /api/recommendations/popular/` | Most watch time over 30 days |
+| `GET /api/videos/{id}/similar/` | Videos with similar text, else trending. `source` says which |
+
+- **Embeddings:** `all-MiniLM-L6-v2` over title + description, run with `fastembed` (ONNX, no PyTorch). Only new
+  or edited videos are re-embedded.
+- **Personal picks:** the average of what a user watched in the last 90 days, weighted towards what they finished,
+  matched against videos they haven't started and didn't upload.
+- **Fresh enough:** deleted videos drop out immediately. A new video has no similar list or picks until the next
+  nightly run.
+- **Known limit:** short titles give the model little to go on. On 24 hand-labelled titles, the cutoff of 0.2 kept
+  41% of same-topic pairs and let through 4% of different-topic ones. So some related videos aren't linked (they
+  get trending instead), and the occasional wrong match is possible. Re-measure when Phase 9 adds transcripts and
+  tags (see `data/pipeline/recommend.py`).
+- **Refresh by hand:**
+
+  ```sh
+  docker compose --profile data exec airflow python -m pipeline.run --from 2026-11-01 --recommendations
+  ```
+
 ## Operations
 
 - **Logs:** every service writes one JSON object per line (`LOG_FORMAT=text` for readable local output),
@@ -326,6 +356,9 @@ Vitest, then builds both Docker images.
 - **`keepalive` fetch instead of `sendBeacon`** for the final flush (see above). `sendBeacon` remains the
   fallback.
 - **Kafka over TLS on MSK** (`KAFKA_SECURITY_PROTOCOL=SSL`). Locally it stays plaintext.
+- **`fastembed` instead of `sentence-transformers`:** same model, without PyTorch's memory and image size.
+- **Collaborative filtering and MLflow (step 51) aren't built yet.** The blueprint says to wait for a few thousand
+  users with real watch history, because on sparse data it does worse than popularity.
 
 ## Deployment (AWS)
 
@@ -351,4 +384,4 @@ Checks that run without AWS: `sh infra/terraform/check.sh` (fmt + validate), Tri
 
 - **Apply Part B to a real AWS account:** needs your go-ahead and credentials. It costs money (see the
   runbook).
-- **Phase 8:** recommendations (trending, similar videos, `GET /api/recommendations/`).
+- **Phase 9:** video intelligence (Whisper transcripts and subtitles, CLIP tags and moderation, search).
