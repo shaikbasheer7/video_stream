@@ -1,0 +1,95 @@
+# Production / staging services on EC2, run by deploy.sh. Images come from ECR, tagged with the git SHA.
+#   profile "api":     nginx + Django + Kafka consumers + monitor (one host behind the load balancer)
+#   profile "encoder": the FFmpeg worker (one or more compute-optimised hosts)
+# .env is generated on every deploy by render_env.py; it feeds both env_file and ${...} below.
+
+x-logging: &logging
+  driver: awslogs
+  options:
+    awslogs-region: ${AWS_REGION}
+    awslogs-group: ${LOG_GROUP}
+    tag: "${ENVIRONMENT}/{{.Name}}"
+
+x-app: &app
+  image: ${ECR_REGISTRY}/${ECR_REPOSITORY_PREFIX:-streaming}/api:${IMAGE_TAG:?IMAGE_TAG is required}
+  env_file: .env
+  restart: unless-stopped
+  logging: *logging
+  profiles: [api]
+
+x-consumer-health: &consumer-health
+  test: ["CMD", "python", "-c", "import os, sys, time; sys.exit(time.time() - os.path.getmtime('/tmp/heartbeat') > 60)"]
+  interval: 15s
+  timeout: 5s
+  retries: 3
+  start_period: 30s
+
+services:
+  nginx:
+    image: ${ECR_REGISTRY}/${ECR_REPOSITORY_PREFIX:-streaming}/web:${IMAGE_TAG:?IMAGE_TAG is required}
+    profiles: [api]
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      - "80:80" # the load balancer's target; TLS terminates at the balancer
+    environment:
+      CSP_MEDIA_ORIGINS: ${CSP_MEDIA_ORIGINS}
+      CSP_UPLOAD_ORIGINS: ${CSP_UPLOAD_ORIGINS}
+      CSP_CONNECT_EXTRA: ${CSP_CONNECT_EXTRA:-}
+      TRUSTED_PROXY_CIDR: ${TRUSTED_PROXY_CIDR}
+    depends_on:
+      django:
+        condition: service_healthy
+
+  django:
+    <<: *app
+    environment:
+      SERVICE_NAME: api
+      RUN_MIGRATIONS: "0" # deploy.sh migrates once, before the new version starts
+    volumes:
+      - ./secrets/cloudfront.pem:/run/secrets/cloudfront.pem:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  status-consumer:
+    <<: *app
+    command: ["python", "manage.py", "run_consumer", "status"]
+    environment: { SERVICE_NAME: status-consumer, RUN_MIGRATIONS: "0" }
+    healthcheck: *consumer-health
+
+  analytics-consumer:
+    <<: *app
+    command: ["python", "manage.py", "run_consumer", "analytics"]
+    environment: { SERVICE_NAME: analytics-consumer, RUN_MIGRATIONS: "0" }
+    healthcheck: *consumer-health
+
+  notify-consumer:
+    <<: *app
+    command: ["python", "manage.py", "run_consumer", "notify"]
+    environment: { SERVICE_NAME: notify-consumer, RUN_MIGRATIONS: "0" }
+    healthcheck: *consumer-health
+
+  feed-consumer:
+    <<: *app
+    command: ["python", "manage.py", "run_consumer", "feed"]
+    environment: { SERVICE_NAME: feed-consumer, RUN_MIGRATIONS: "0" }
+    healthcheck: *consumer-health
+
+  monitor:
+    <<: *app
+    command: ["python", "manage.py", "monitor", "--interval", "60"]
+    environment: { SERVICE_NAME: monitor, RUN_MIGRATIONS: "0" } # pushes metrics to CLOUDWATCH_NAMESPACE
+
+  encoder:
+    image: ${ECR_REGISTRY}/${ECR_REPOSITORY_PREFIX:-streaming}/encoder:${IMAGE_TAG:?IMAGE_TAG is required}
+    profiles: [encoder]
+    env_file: .env
+    environment:
+      SERVICE_NAME: encoder
+    restart: unless-stopped
+    logging: *logging
+    stop_grace_period: 30s # an interrupted encode is redelivered and redone (see the worker docstring)

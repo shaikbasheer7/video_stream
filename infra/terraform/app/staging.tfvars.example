@@ -1,0 +1,28 @@
+# Copy to staging.tfvars (git-ignored) and fill in. Values from `terraform output` in infra/terraform/bootstrap.
+environment        = "staging"
+github_environment = "staging"
+region             = "us-east-1"
+
+app_domain          = "staging.example.com"
+cdn_domain          = "media-staging.example.com"
+cookie_domain       = ".example.com"
+alb_certificate_arn = "arn:aws:acm:us-east-1:111111111111:certificate/..."
+cdn_certificate_arn = "arn:aws:acm:us-east-1:111111111111:certificate/..."
+
+cloudfront_public_key_pem = <<-PEM
+  -----BEGIN PUBLIC KEY-----
+  ...
+  -----END PUBLIC KEY-----
+PEM
+
+# Smaller and disposable.
+api_instance_type   = "t3.small"
+encoder_count       = 1
+db_instance_class   = "db.t4g.micro"
+deletion_protection = false
+
+ecr_registry             = "111111111111.dkr.ecr.us-east-1.amazonaws.com"
+releases_bucket          = "streaming-releases-111111111111"
+github_oidc_provider_arn = "arn:aws:iam::111111111111:oidc-provider/token.actions.githubusercontent.com"
+github_repository        = "your-org/streaming"
+alarm_email              = "oncall@example.com"

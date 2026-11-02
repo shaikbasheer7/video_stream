@@ -1,0 +1,28 @@
+#!/bin/bash
+# First boot only: install Docker + the Compose plugin and record where this host gets its configuration.
+# Application containers arrive with the first deploy (deploy/deploy.sh, run through SSM by CI).
+set -euxo pipefail
+
+dnf install -y docker python3
+systemctl enable --now docker
+
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -fsSL -o /usr/local/lib/docker/cli-plugins/docker-compose \
+  "https://github.com/docker/compose/releases/download/${docker_compose_version}/docker-compose-linux-$(uname -m)"
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+docker compose version
+
+install -d -m 0750 /opt/streaming
+cat > /opt/streaming/host.env <<'HOSTENV'
+ENVIRONMENT=${environment}
+ROLE=${role}
+AWS_REGION=${region}
+ECR_REGISTRY=${ecr_registry}
+ECR_REPOSITORY_PREFIX=${ecr_repository_prefix}
+RELEASES_BUCKET=${releases_bucket}
+CONFIG_PARAMETER=${config_parameter}
+APP_SECRET_ID=${app_secret_id}
+DB_SECRET_ID=${db_secret_id}
+LOG_GROUP=${log_group}
+HOSTENV
+chmod 0640 /opt/streaming/host.env

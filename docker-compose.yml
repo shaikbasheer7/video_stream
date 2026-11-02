@@ -1,0 +1,288 @@
+# Local stack for the streaming MVP. Copy .env.example to .env first.
+
+# Shared by Django, the consumers and the encoder.
+x-backend-env-vars: &backend-env-vars
+  POSTGRES_HOST: postgres
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  S3_ENDPOINT_URL: http://s3:8333
+  S3_ADDRESSING_STYLE: path
+  CLOUDFRONT_KEY_PAIR_ID: LOCALDEVKEY
+  MONGO_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
+
+# Kafka subscribers: same backend image, `manage.py run_consumer <name>`.
+x-consumer: &consumer
+  build: ./backend
+  env_file: .env
+  environment:
+    <<: *backend-env-vars
+    RUN_MIGRATIONS: "0"
+  depends_on:
+    django:
+      condition: service_healthy  # migrations, topics and Mongo indexes exist
+  healthcheck:
+    test: ["CMD", "python", "-c", "import os, sys, time; sys.exit(time.time() - os.path.getmtime('/tmp/heartbeat') > 60)"]
+    interval: 15s
+    timeout: 5s
+    retries: 3
+    start_period: 20s
+
+services:
+  nginx:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "8080:80"
+    environment:
+      CSP_UPLOAD_ORIGINS: http://localhost:8333  # browsers PUT uploads straight to local S3
+    volumes:
+      - ./infra/nginx/local-cdn.conf:/etc/nginx/extra/local-cdn.conf:ro
+    depends_on:
+      django:
+        condition: service_healthy
+      cdn:
+        condition: service_healthy
+
+  # Local stand-in for CloudFront, served at http://localhost:8080/cdn/ through nginx.
+  # Verifies the same signed cookies CloudFront would and is the only reader of the bucket.
+  cdn:
+    build: ./infra/local-cdn
+    env_file: .env
+    environment:
+      <<: *backend-env-vars
+      CLOUDFRONT_PUBLIC_KEY_PATH: /var/cdn-keys/public.pem
+    volumes:
+      - cdn-keys:/var/cdn-keys:ro
+    depends_on:
+      django:
+        condition: service_healthy  # generates the key pair on first start
+
+  django:
+    build: ./backend
+    env_file: .env
+    environment:
+      <<: *backend-env-vars
+      ENSURE_INFRA: "1"  # bucket, topics and the dev CDN signing key
+      CLOUDFRONT_PRIVATE_KEY_PATH: /var/cdn-keys/private.pem
+      SERVICE_NAME: api
+    volumes:
+      - cdn-keys:/var/cdn-keys
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      s3:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # video.ready / video.failed -> Video and Rendition rows.
+  status-consumer:
+    <<: *consumer
+    command: ["python", "manage.py", "run_consumer", "status"]
+    environment:
+      <<: *backend-env-vars
+      RUN_MIGRATIONS: "0"
+      SERVICE_NAME: status-consumer
+
+  # events.playback -> MongoDB playback_events + watch_progress.
+  analytics-consumer:
+    <<: *consumer
+    command: ["python", "manage.py", "run_consumer", "analytics"]
+    environment:
+      <<: *backend-env-vars
+      RUN_MIGRATIONS: "0"
+      SERVICE_NAME: analytics-consumer
+
+  # video.ready / video.failed -> in-app notification for the uploader.
+  notify-consumer:
+    <<: *consumer
+    command: ["python", "manage.py", "run_consumer", "notify"]
+    environment:
+      <<: *backend-env-vars
+      RUN_MIGRATIONS: "0"
+      SERVICE_NAME: notify-consumer
+
+  # video.ready -> followers' feeds.
+  feed-consumer:
+    <<: *consumer
+    command: ["python", "manage.py", "run_consumer", "feed"]
+    environment:
+      <<: *backend-env-vars
+      RUN_MIGRATIONS: "0"
+      SERVICE_NAME: feed-consumer
+
+  # Consumer lag + DLQ size every minute, as JSON log lines (and CloudWatch metrics in AWS).
+  monitor:
+    <<: *consumer
+    command: ["python", "manage.py", "monitor", "--interval", "60"]
+    environment:
+      <<: *backend-env-vars
+      RUN_MIGRATIONS: "0"
+      SERVICE_NAME: monitor
+    healthcheck:
+      disable: true
+
+  # FFmpeg worker. Scale with: docker compose up -d --scale encoder=3 (topics have 6 partitions).
+  encoder:
+    build: ./worker
+    env_file: .env
+    environment:
+      <<: *backend-env-vars
+    depends_on:
+      django:
+        condition: service_healthy  # migrations, bucket and topics exist
+    deploy:
+      resources:
+        limits:
+          cpus: "2"  # keep encoding from starving the API
+          memory: 2g
+    stop_grace_period: 30s
+
+  # ---------- Data stack (optional, heavy): docker compose --profile data up -d ----------
+  # Both bind to 127.0.0.1 only: local tools with convenience logins.
+
+  # Airflow in one container (`standalone`: scheduler, API server, DAG processor). http://localhost:8081
+  airflow:
+    profiles: [data]
+    build:
+      context: ./data
+      dockerfile: airflow/Dockerfile
+    command: standalone
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "true" # no login: local only, see the port binding
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
+      ANALYTICS_DB_URL: postgresql://analytics_etl:${ANALYTICS_ETL_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      MONGO_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
+      MONGO_DB: ${MONGO_DB}
+    ports:
+      - "127.0.0.1:8081:8080"
+    depends_on:
+      django:
+        condition: service_healthy # migrations, the airflow database and the analytics roles exist
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  # Superset with the dashboards from data/superset/build_assets.py. http://localhost:8088
+  superset:
+    profiles: [data]
+    build:
+      context: ./data
+      dockerfile: superset/Dockerfile
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD}
+      SUPERSET_METADATA_DB_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/superset
+      ANALYTICS_RO_PASSWORD: ${ANALYTICS_RO_PASSWORD}
+      ANALYTICS_DB_HOST: postgres
+      ANALYTICS_DB_NAME: ${POSTGRES_DB}
+    ports:
+      - "127.0.0.1:8088:8088"
+    depends_on:
+      django:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mongo:
+    image: mongo:7
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  kafka:
+    image: apache/kafka:3.9.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    ports:
+      - "29092:29092"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 15s
+
+  # Local S3 replacement. The blueprint names MinIO, but MinIO no longer publishes
+  # community Docker images, so SeaweedFS's S3 gateway fills the same role.
+  s3:
+    image: chrislusf/seaweedfs:4.50
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        cat > /etc/s3.json <<EOF
+        {"identities":[{"name":"local","credentials":[{"accessKey":"$$AWS_ACCESS_KEY_ID","secretKey":"$$AWS_SECRET_ACCESS_KEY"}],"actions":["Admin","Read","Write","List","Tagging"]}]}
+        EOF
+        exec weed server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/s3.json -volume.max=0
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    volumes:
+      - s3-data:/data
+    ports:
+      - "8333:8333"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+volumes:
+  cdn-keys:
+  mongo-data:
+  postgres-data:
+  kafka-data:
+  s3-data:

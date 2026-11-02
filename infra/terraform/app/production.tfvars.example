@@ -1,0 +1,28 @@
+# Copy to production.tfvars (git-ignored) and fill in.
+environment        = "production"
+github_environment = "production"
+region             = "us-east-1"
+
+app_domain          = "app.example.com"
+cdn_domain          = "media.example.com"
+cookie_domain       = ".example.com"
+alb_certificate_arn = "arn:aws:acm:us-east-1:111111111111:certificate/..."
+cdn_certificate_arn = "arn:aws:acm:us-east-1:111111111111:certificate/..."
+
+cloudfront_public_key_pem = <<-PEM
+  -----BEGIN PUBLIC KEY-----
+  ...
+  -----END PUBLIC KEY-----
+PEM
+
+api_instance_type   = "t3.medium"
+encoder_count       = 1 # raise to scale encoding (Kafka topics have 6 partitions)
+db_instance_class   = "db.t4g.small"
+db_multi_az         = true
+deletion_protection = true
+
+ecr_registry             = "111111111111.dkr.ecr.us-east-1.amazonaws.com"
+releases_bucket          = "streaming-releases-111111111111"
+github_oidc_provider_arn = "arn:aws:iam::111111111111:oidc-provider/token.actions.githubusercontent.com"
+github_repository        = "your-org/streaming"
+alarm_email              = "oncall@example.com"
