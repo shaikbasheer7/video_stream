@@ -12,7 +12,7 @@ ARG GIT_SHA=""
 ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN VITE_SENTRY_ENVIRONMENT=$VITE_SENTRY_ENVIRONMENT VITE_RELEASE=$GIT_SHA
 RUN npm run build
 
-FROM nginx:1.30-alpine
+FROM nginx:1.31-alpine
 # Pick up Alpine security fixes released after the base image was built (Trivy gates this in CI).
 RUN apk upgrade --no-cache
 # Content-Security-Policy origins, filled into the template at start (override per environment):
