@@ -42,7 +42,7 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
       - id: tag
@@ -90,7 +90,7 @@ jobs:
       name: staging
       url: ${{ vars.APP_URL }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.build.outputs.tag }}
       - uses: aws-actions/configure-aws-credentials@v4
@@ -114,7 +114,7 @@ jobs:
       name: production # required reviewers on this environment = the manual approval gate
       url: ${{ vars.APP_URL }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.build.outputs.tag }}
       - uses: aws-actions/configure-aws-credentials@v4
@@ -139,7 +139,7 @@ jobs:
       name: ${{ inputs.environment }}
       url: ${{ vars.APP_URL }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.image_tag }}
       - uses: aws-actions/configure-aws-credentials@v4
