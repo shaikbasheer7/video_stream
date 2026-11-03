@@ -6,7 +6,7 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import AccessToken
 
 from accounts.models import User
-from common import kafka
+from common import geo, kafka
 
 VIDEO = str(uuid.uuid4())
 
@@ -30,6 +30,18 @@ def event(type_="progress", **extra):
 def post(client, events, **params):
     query = "?" + "&".join(f"{k}={v}" for k, v in params.items()) if params else ""
     return client.post(f"/api/events/batch/{query}", {"anonymous_id": "anon-1", "events": events}, format="json")
+
+
+@pytest.mark.django_db
+def test_country_comes_from_the_address_nginx_saw_and_the_address_is_not_kept(published, monkeypatch):
+    monkeypatch.setattr(geo, "country_for_ip", lambda ip: {"8.8.8.8": "US"}.get(ip))
+    # A client can send these headers directly, but only X-Real-IP (overwritten by nginx) counts.
+    client = APIClient(HTTP_X_REAL_IP="8.8.8.8", HTTP_CLOUDFRONT_VIEWER_COUNTRY="FR")
+    assert post(client, [event()]).status_code == 202
+
+    _, _, message = published[0][0]
+    assert message["country"] == "US"
+    assert "8.8.8.8" not in str(message)
 
 
 @pytest.mark.django_db

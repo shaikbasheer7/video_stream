@@ -144,6 +144,8 @@ select {
 .similar { margin-top: 24px; }
 
 .watch-meta { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.site-footer { text-align: center; padding: 0 16px 24px; }
+.site-footer a { color: inherit; }
 .load-more { display: flex; justify-content: center; margin-top: 24px; }
 .search-box { margin-right: 16px; box-sizing: border-box; }
 .search-box input { box-sizing: border-box; width: 260px; padding: 7px 12px; }

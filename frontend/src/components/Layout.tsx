@@ -45,6 +45,9 @@ export default function Layout() {
       <main>
         <Outlet />
       </main>
+      <footer className="site-footer muted small">
+        <a href="https://db-ip.com">IP Geolocation by DB-IP</a>
+      </footer>
     </>
   );
 }

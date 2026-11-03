@@ -246,6 +246,8 @@ DASHBOARDS = {
     },
     "streaming-quality": {
         "title": "Streaming quality",
+        # DB-IP's license asks for this link wherever its results are shown.
+        "note": "Countries: [IP Geolocation by DB-IP](https://db-ip.com)",
         "filters": [("Device", Q, "device"), ("Country", Q, "country")],
         "rows": [
             [
@@ -377,6 +379,22 @@ def position_tree(dashboard, spec):
                     "sliceName": chart["name"],
                 },
             }
+    if "note" in spec:
+        tree["GRID_ID"]["children"].append("ROW-note")
+        tree["ROW-note"] = {
+            "type": "ROW",
+            "id": "ROW-note",
+            "children": ["MARKDOWN-note"],
+            "parents": ["ROOT_ID", "GRID_ID"],
+            "meta": {"background": "BACKGROUND_TRANSPARENT"},
+        }
+        tree["MARKDOWN-note"] = {
+            "type": "MARKDOWN",
+            "id": "MARKDOWN-note",
+            "children": [],
+            "parents": ["ROOT_ID", "GRID_ID", "ROW-note"],
+            "meta": {"code": spec["note"], "width": GRID_COLUMNS, "height": 8},
+        }
     return tree
 
 

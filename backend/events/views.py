@@ -9,7 +9,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken
 
-from common import kafka
+from common import geo, kafka
 
 from .serializers import EventBatchSerializer
 
@@ -26,8 +26,8 @@ def device_from_user_agent(ua):
 
 
 def country_from_request(request):
-    # Set by CloudFront/ALB when configured; GeoIP lookup can be added later.
-    return request.headers.get("CloudFront-Viewer-Country") or None
+    # nginx always overwrites X-Real-IP, so a client can't fake it. Only the country is kept, never the address.
+    return geo.country_for_ip(request.headers.get("X-Real-IP") or request.META.get("REMOTE_ADDR"))
 
 
 class OptionalJWTAuthentication(JWTAuthentication):

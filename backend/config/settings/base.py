@@ -173,6 +173,8 @@ PLAYBACK_MAX_TTL_SEC = 12 * 60 * 60
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 MONGO_DB = os.environ.get("MONGO_DB", "streaming")
 EVENTS_TTL_DAYS = int(os.environ.get("EVENTS_TTL_DAYS", 90))
+# Built into the image (backend/Dockerfile); without it, playback events simply have no country.
+COUNTRY_DB_PATH = os.environ.get("COUNTRY_DB_PATH", "/opt/geo/dbip-country.mmdb")
 
 # Data stack (Airflow + Superset). Roles are only created when these are set (see common/analytics_access.py).
 ANALYTICS_ETL_PASSWORD = os.environ.get("ANALYTICS_ETL_PASSWORD", "")

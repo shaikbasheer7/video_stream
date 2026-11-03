@@ -179,7 +179,11 @@ video.ready ───────────────> feed-consumer ──�
 - **Tracked events:** play, pause, seek (from/to), progress (every 10 s of playback), quality_change
   (from/to, auto or manual), buffering (stall duration) and complete (at 95%, with seconds actually watched).
   Each event carries `session_id`, the user (or an anonymous browser id), the quality, a client timestamp,
-  and the device and country added by the server.
+  and the device and country added by the server. The country comes from the viewer's IP address and the address
+  itself is never stored with the event. It uses [DB-IP's free database](https://db-ip.com) (CC BY 4.0), built into the
+  image, so there are no outside calls and it can be wrong for VPNs and some mobile networks. Local requests have no
+  country, because private addresses aren't in it. The version is pinned in `backend/Dockerfile`, so update it
+  occasionally.
 - **Batching:** the saga sends events every 15 s or once 50 are waiting. When the page is hidden or
   closed, it sends the rest with `fetch(..., {keepalive: true})`, which unlike `sendBeacon` can carry the
   `Authorization` header (`sendBeacon` is the fallback). That final batch goes to `?final=1`, so an
@@ -431,8 +435,6 @@ Vitest, then builds and scans every Docker image.
 **Not built yet:**
 
 - **Comments:** the data model lists a MongoDB `comments` collection, but no endpoint, page or checklist step covers it.
-- **`country` on playback events:** the API only reads `CloudFront-Viewer-Country`, and API calls don't pass through
-  CloudFront, so it's always empty. The streaming-quality dashboard's country column shows demo data only.
 - **Jupyter container (section 12.3)** and **the rest of Phase 10**.
 - **Monitoring:** lag, DLQ, 5xx and health alarms exist. Encoding duration is only in the logs, and API latency, encoding
   failure rate and CloudFront cache hit ratio have no dashboard or alarm.
