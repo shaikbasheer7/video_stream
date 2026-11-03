@@ -3,9 +3,25 @@ import type { Video } from '../../types/api';
 
 export type RecommendationSource = 'personalized' | 'trending' | 'latest';
 
+export interface VideoPage {
+  results: Video[];
+  hasMore: boolean;
+}
+
+/** A video can shift to the next page when a newer one arrives, so it may come back twice. */
+function addPage(existing: Video[], results: Video[]): Video[] {
+  const seen = new Set(existing.map((v) => v.id));
+  return [...existing, ...results.filter((v) => !seen.has(v.id))];
+}
+
 export interface VideosState {
   browse: Video[];
   browseLoading: boolean;
+  browsePage: number;
+  browseHasMore: boolean;
+  minePage: number;
+  mineHasMore: boolean;
+  loadingMore: boolean;
   recommended: Video[];
   recommendedSource: RecommendationSource | null;
   trending: Video[];
@@ -24,6 +40,11 @@ export interface VideosState {
 const initialState: VideosState = {
   browse: [],
   browseLoading: false,
+  browsePage: 1,
+  browseHasMore: false,
+  minePage: 1,
+  mineHasMore: false,
+  loadingMore: false,
   recommended: [],
   recommendedSource: null,
   trending: [],
@@ -47,9 +68,21 @@ const videosSlice = createSlice({
       state.browseLoading = true;
       state.error = null;
     },
-    browseLoaded(state, action: PayloadAction<Video[]>) {
-      state.browse = action.payload;
+    browseLoaded(state, action: PayloadAction<VideoPage>) {
+      state.browse = action.payload.results;
+      state.browsePage = 1;
+      state.browseHasMore = action.payload.hasMore;
       state.browseLoading = false;
+    },
+    browseMoreRequested(state) {
+      state.loadingMore = true;
+      state.error = null;
+    },
+    browseMoreLoaded(state, action: PayloadAction<VideoPage>) {
+      state.browse = addPage(state.browse, action.payload.results);
+      state.browsePage += 1;
+      state.browseHasMore = action.payload.hasMore;
+      state.loadingMore = false;
     },
     recommendationsRequested() {},
     recommendationsLoaded(
@@ -96,14 +129,35 @@ const videosSlice = createSlice({
       state.loading = true;
       state.error = null;
     },
-    myVideosLoaded(state, action: PayloadAction<Video[]>) {
-      state.mine = action.payload;
+    myVideosLoaded(state, action: PayloadAction<VideoPage>) {
+      const { results, hasMore } = action.payload;
       state.loading = false;
+      if (state.minePage > 1 && results.length > 0) {
+        // The library refreshes page 1 while something encodes: keep the older pages already on screen.
+        const ids = new Set(results.map((v) => v.id));
+        const oldest = results[results.length - 1].created_at;
+        state.mine = [...results, ...state.mine.filter((v) => !ids.has(v.id) && v.created_at < oldest)];
+        return;
+      }
+      state.mine = results;
+      state.minePage = 1;
+      state.mineHasMore = hasMore;
+    },
+    myVideosMoreRequested(state) {
+      state.loadingMore = true;
+      state.error = null;
+    },
+    myVideosMoreLoaded(state, action: PayloadAction<VideoPage>) {
+      state.mine = addPage(state.mine, action.payload.results);
+      state.minePage += 1;
+      state.mineHasMore = action.payload.hasMore;
+      state.loadingMore = false;
     },
     videosFailed(state, action: PayloadAction<string>) {
       state.loading = false;
       state.browseLoading = false;
       state.feedLoading = false;
+      state.loadingMore = false;
       state.error = action.payload;
     },
     // Also used to renew the CDN cookies: fetching details sets fresh ones.
@@ -139,6 +193,8 @@ const videosSlice = createSlice({
 export const {
   browseRequested,
   browseLoaded,
+  browseMoreRequested,
+  browseMoreLoaded,
   recommendationsRequested,
   recommendationsLoaded,
   similarRequested,
@@ -152,6 +208,8 @@ export const {
   followChanged,
   myVideosRequested,
   myVideosLoaded,
+  myVideosMoreRequested,
+  myVideosMoreLoaded,
   videosFailed,
   videoRequested,
   videoLoaded,

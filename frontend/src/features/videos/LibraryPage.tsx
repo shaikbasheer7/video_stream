@@ -4,7 +4,8 @@ import { useAppDispatch, useAppSelector } from '../../app/store';
 import type { Video, VideoStatus } from '../../types/api';
 import { formatBytes } from '../upload/fileRules';
 import { formatDuration } from './format';
-import { myVideosRequested, videoDeleteRequested } from './videosSlice';
+import LoadMore from './LoadMore';
+import { myVideosMoreRequested, myVideosRequested, videoDeleteRequested } from './videosSlice';
 
 const STATUS_LABELS: Record<VideoStatus, string> = {
   uploading: 'Uploading',
@@ -28,7 +29,7 @@ function details(video: Video): string {
 /** Your uploads in every state. Ready ones link to the player. */
 export default function LibraryPage() {
   const dispatch = useAppDispatch();
-  const { mine, loading, error } = useAppSelector((s) => s.videos);
+  const { mine, mineHasMore, loading, loadingMore, error } = useAppSelector((s) => s.videos);
   const hasPending = mine.some((v) => PENDING.includes(v.status));
 
   useEffect(() => {
@@ -97,6 +98,7 @@ export default function LibraryPage() {
           ))}
         </ul>
       )}
+      {mineHasMore && <LoadMore loading={loadingMore} onClick={() => dispatch(myVideosMoreRequested())} />}
     </section>
   );
 }

@@ -21,11 +21,19 @@ jobs:
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U streaming" --health-interval 5s --health-timeout 3s --health-retries 10
+      kafka:
+        image: apache/kafka:3.9.1
+        ports: ["9092:9092"]
+        options: >-
+          --health-cmd "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"
+          --health-interval 10s --health-timeout 10s --health-retries 12
     env:
       POSTGRES_HOST: localhost
       POSTGRES_DB: streaming
       POSTGRES_USER: streaming
       POSTGRES_PASSWORD: streaming
+      KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+      KAFKA_INTEGRATION: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Video } from '../../types/api';
 import reducer, {
+  browseLoaded,
+  browseMoreLoaded,
+  browseMoreRequested,
+  myVideosLoaded,
+  myVideosMoreLoaded,
   searchFailed,
   searchLoaded,
   searchRequested,
@@ -12,6 +17,27 @@ import reducer, {
 } from './videosSlice';
 
 const video = (id: string, resume: number | null | undefined) => ({ id, resume_position_sec: resume }) as Video;
+
+describe('videosSlice pagination', () => {
+  const dated = (id: string, created_at: string) => ({ id, created_at }) as Video;
+
+  it('adds the next page without repeating a video that shifted onto it', () => {
+    let state = reducer(undefined, browseLoaded({ results: [dated('a', '3'), dated('b', '2')], hasMore: true }));
+    state = reducer(state, browseMoreRequested());
+    expect(state.loadingMore).toBe(true);
+    state = reducer(state, browseMoreLoaded({ results: [dated('b', '2'), dated('c', '1')], hasMore: false }));
+    expect(state.browse.map((v) => v.id)).toEqual(['a', 'b', 'c']);
+    expect(state).toMatchObject({ browsePage: 2, browseHasMore: false, loadingMore: false });
+  });
+
+  it('keeps older pages when the library refreshes page 1, and adds a new upload on top', () => {
+    let state = reducer(undefined, myVideosLoaded({ results: [dated('b', '3')], hasMore: true }));
+    state = reducer(state, myVideosMoreLoaded({ results: [dated('a', '2')], hasMore: true }));
+    state = reducer(state, myVideosLoaded({ results: [dated('new', '4'), dated('b', '3')], hasMore: true }));
+    expect(state.mine.map((v) => v.id)).toEqual(['new', 'b', 'a']);
+    expect(state).toMatchObject({ minePage: 2, mineHasMore: true });
+  });
+});
 
 describe('videosSlice search', () => {
   const loaded = () => reducer(reducer(undefined, searchRequested('cats')), searchLoaded([video('a', null)]));

@@ -11,6 +11,13 @@ real_ip_recursive on;
 limit_req_zone $binary_remote_addr zone=auth:10m rate=10r/m;
 limit_req_zone $binary_remote_addr zone=api:10m rate=20r/s;
 
+# Presigning (POST /api/videos/) gets its own limit. An empty key isn't counted, so other API calls don't touch it.
+map "$request_method:$uri" $presign_client {
+    default "";
+    "POST:/api/videos/" $binary_remote_addr;
+}
+limit_req_zone $presign_client zone=presign:10m rate=10r/m;
+
 # Behind a load balancer, keep the protocol the client actually used (Django redirects to HTTPS on it).
 map $http_x_forwarded_proto $forwarded_proto {
     default $http_x_forwarded_proto;
@@ -45,6 +52,7 @@ server {
 
     location /api/ {
         limit_req zone=api burst=40 nodelay;
+        limit_req zone=presign burst=5 nodelay;
         limit_req_status 429;
         include /etc/nginx/proxy_django.conf;
     }

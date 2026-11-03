@@ -1,11 +1,15 @@
 import type { PayloadAction } from '@reduxjs/toolkit';
 import axios from 'axios';
-import { all, call, put, takeEvery, takeLatest } from 'redux-saga/effects';
+import { all, call, put, select, takeEvery, takeLatest, takeLeading } from 'redux-saga/effects';
 import { api, errorMessage } from '../../app/api';
 import type { Paginated, Video } from '../../types/api';
 import {
   browseLoaded,
+  browseMoreLoaded,
+  browseMoreRequested,
   browseRequested,
+  myVideosMoreLoaded,
+  myVideosMoreRequested,
   recommendationsLoaded,
   recommendationsRequested,
   similarLoaded,
@@ -26,12 +30,25 @@ import {
   videoLoadFailed,
   videoRequested,
   videosFailed,
+  type VideosState,
 } from './videosSlice';
+
+const toPage = (data: Paginated<Video>) => ({ results: data.results, hasMore: data.next !== null });
 
 function* fetchBrowse() {
   try {
     const { data }: { data: Paginated<Video> } = yield call(api.get, '/videos/');
-    yield put(browseLoaded(data.results));
+    yield put(browseLoaded(toPage(data)));
+  } catch (error) {
+    yield put(videosFailed(errorMessage(error)));
+  }
+}
+
+function* fetchMoreBrowse() {
+  try {
+    const page: number = yield select((s: { videos: VideosState }) => s.videos.browsePage);
+    const { data }: { data: Paginated<Video> } = yield call(api.get, '/videos/', { params: { page: page + 1 } });
+    yield put(browseMoreLoaded(toPage(data)));
   } catch (error) {
     yield put(videosFailed(errorMessage(error)));
   }
@@ -102,7 +119,19 @@ function* changeFollow(action: PayloadAction<{ userId: number; follow: boolean }
 function* fetchMyVideos() {
   try {
     const { data }: { data: Paginated<Video> } = yield call(api.get, '/videos/', { params: { mine: true } });
-    yield put(myVideosLoaded(data.results));
+    yield put(myVideosLoaded(toPage(data)));
+  } catch (error) {
+    yield put(videosFailed(errorMessage(error)));
+  }
+}
+
+function* fetchMoreMyVideos() {
+  try {
+    const page: number = yield select((s: { videos: VideosState }) => s.videos.minePage);
+    const { data }: { data: Paginated<Video> } = yield call(api.get, '/videos/', {
+      params: { mine: true, page: page + 1 },
+    });
+    yield put(myVideosMoreLoaded(toPage(data)));
   } catch (error) {
     yield put(videosFailed(errorMessage(error)));
   }
@@ -129,6 +158,8 @@ function* deleteVideo(action: PayloadAction<string>) {
 
 export default function* videosSaga() {
   yield takeLatest(browseRequested.type, fetchBrowse);
+  yield takeLeading(browseMoreRequested.type, fetchMoreBrowse);
+  yield takeLeading(myVideosMoreRequested.type, fetchMoreMyVideos);
   yield takeLatest(recommendationsRequested.type, fetchRecommendations);
   yield takeLatest(similarRequested.type, fetchSimilar);
   yield takeLatest(searchRequested.type, fetchSearch);

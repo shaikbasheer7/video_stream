@@ -127,8 +127,6 @@ services:
       <<: *backend-env-vars
       RUN_MIGRATIONS: "0"
       SERVICE_NAME: monitor
-    healthcheck:
-      disable: true
 
   # FFmpeg worker. Scale with: docker compose up -d --scale encoder=3 (topics have 6 partitions).
   encoder:

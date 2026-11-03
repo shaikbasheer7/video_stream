@@ -83,6 +83,7 @@ services:
     <<: *app
     command: ["python", "manage.py", "monitor", "--interval", "60"]
     environment: { SERVICE_NAME: monitor, RUN_MIGRATIONS: "0" } # pushes metrics to CLOUDWATCH_NAMESPACE
+    healthcheck: *consumer-health
 
   encoder:
     image: ${ECR_REGISTRY}/${ECR_REPOSITORY_PREFIX:-streaming}/encoder:${IMAGE_TAG:?IMAGE_TAG is required}

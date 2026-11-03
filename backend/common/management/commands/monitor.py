@@ -10,12 +10,14 @@ import logging
 import os
 import signal
 import time
+from pathlib import Path
 
 from django.core.management.base import BaseCommand
 
 from common.lag import KafkaInspector
 
 logger = logging.getLogger("monitor")
+HEARTBEAT_FILE = Path("/tmp/heartbeat")  # noqa: S108 (same file as the consumers)
 
 
 def evaluate(previous, current, lag_threshold):
@@ -77,6 +79,7 @@ class Command(BaseCommand):
                 for _ in range(interval):
                     if stopping:
                         break
+                    HEARTBEAT_FILE.touch()  # the container's health check reads this
                     time.sleep(1)
         finally:
             inspector.close()

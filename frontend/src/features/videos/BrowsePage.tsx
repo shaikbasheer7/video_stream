@@ -1,12 +1,14 @@
 import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../app/store';
+import LoadMore from './LoadMore';
 import VideoGrid from './VideoGrid';
-import { browseRequested, recommendationsRequested } from './videosSlice';
+import { browseMoreRequested, browseRequested, recommendationsRequested } from './videosSlice';
 
 export default function BrowsePage() {
   const dispatch = useAppDispatch();
-  const { browse, browseLoading, error, recommended, recommendedSource, trending } = useAppSelector((s) => s.videos);
+  const { browse, browseHasMore, browseLoading, error, loadingMore, recommended, recommendedSource, trending } =
+    useAppSelector((s) => s.videos);
   const authStatus = useAppSelector((s) => s.auth.status);
   const authSettled = authStatus === 'authenticated' || authStatus === 'anonymous';
 
@@ -50,6 +52,7 @@ export default function BrowsePage() {
           </div>
         )}
         <VideoGrid videos={browse} />
+        {browseHasMore && <LoadMore loading={loadingMore} onClick={() => dispatch(browseMoreRequested())} />}
       </section>
     </div>
   );

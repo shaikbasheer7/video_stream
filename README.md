@@ -392,12 +392,13 @@ docker run --rm -v "$PWD/frontend:/app" -w /app node:22-alpine \
 With Node installed locally, `cd frontend && npm install && npm run dev` gives hot reload on
 http://localhost:5173. It proxies `/api` to the Docker stack on :8080.
 
-CI (`.github/workflows/ci.yml`) runs ruff, a migrations check and pytest against Postgres, ESLint, tsc and
-Vitest, then builds both Docker images.
+CI (`.github/workflows/ci.yml`) runs ruff, a migrations check and pytest against Postgres and Kafka, ESLint, tsc and
+Vitest, then builds and scans every Docker image.
 
 ## Deviations from the blueprint
 
-- **No MongoDB yet** (lean MVP). PostgreSQL only until Phase 5 (subscribers and events).
+- **MongoDB and subscribers arrived in Phase 5, not Phase 1** (lean MVP, as the blueprint's "ways to go faster"
+  suggests). The stack now matches the blueprint.
 - **SeaweedFS instead of MinIO** for local S3. MinIO no longer publishes community Docker images.
   Both speak the S3 API, so boto3 code is the same. SeaweedFS ignores bucket lifecycle rules, which
   only take effect on real S3.
@@ -418,6 +419,23 @@ Vitest, then builds both Docker images.
   users with real watch history, because on sparse data it does worse than popularity.
 - **`faster-whisper` and `fastembed` instead of PyTorch Whisper and CLIP:** the same models through CTranslate2 and
   ONNX, on a CPU, with a much smaller image and memory use. The blueprint suggests a GPU only once volume grows.
+- **Time-based keyframes instead of `-g 48`:** a keyframe every 2 seconds stays aligned across renditions at any frame
+  rate, whereas 48 frames is only 2 seconds at 24 fps.
+- **Deleting a video cleans S3 during the request, not through an event.** The blueprint's endpoint table says "via
+  event", but its topic table has no such topic. If S3 fails, the API returns 503 and the video stays, so nothing is
+  orphaned. A video with many files makes the request slower.
+- **Layout and naming:** `run_consumer <name>` instead of one command per consumer, notify and feed as separate
+  containers, the silent token refresh in the axios interceptor rather than `authSaga` (same single-refresh lock), and
+  `VideoGrid` instead of `VideoCard`. Behaviour is the same.
+
+**Not built yet:**
+
+- **Comments:** the data model lists a MongoDB `comments` collection, but no endpoint, page or checklist step covers it.
+- **`country` on playback events:** the API only reads `CloudFront-Viewer-Country`, and API calls don't pass through
+  CloudFront, so it's always empty. The streaming-quality dashboard's country column shows demo data only.
+- **Jupyter container (section 12.3)** and **the rest of Phase 10**.
+- **Monitoring:** lag, DLQ, 5xx and health alarms exist. Encoding duration is only in the logs, and API latency, encoding
+  failure rate and CloudFront cache hit ratio have no dashboard or alarm.
 
 ## Deployment (AWS)
 
