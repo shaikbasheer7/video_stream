@@ -54,7 +54,9 @@ class KafkaInspector:
         """{"lag": {group: messages waiting}, "dlq_messages": total in the dead-letter topics}."""
         lag = {}
         # The ML worker is optional (Compose profile `ml`): without it, its group would only ever show a growing lag.
-        groups = {**GROUPS, "ml": [kafka.VIDEO_READY]} if settings.ML_WORKER_DB_PASSWORD else GROUPS
+        groups = {**GROUPS, "ml": [kafka.VIDEO_READY]} if settings.ML_WORKER_DB_PASSWORD else dict(GROUPS)
+        if settings.LAKE_SINK_ENABLED:  # the same goes for Kafka Connect (Compose profile `bigdata`)
+            groups["connect-lake-sink"] = [kafka.EVENTS_PLAYBACK]
         for group, topics in groups.items():
             partitions = self.partitions(topics)
             lag[group] = compute_lag(partitions, self.committed(group, partitions), self.watermarks(partitions))

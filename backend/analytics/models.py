@@ -66,6 +66,21 @@ class DailyStreamingQuality(models.Model):
         return f"{self.date} {self.device}/{self.country}/{self.quality}"
 
 
+class LiveMetric(models.Model):
+    """One row a minute from the Spark stream (data/pipeline/live.py), for the live dashboard. Kept for 7 days."""
+
+    minute = models.DateTimeField(primary_key=True)
+    active_viewers = models.PositiveIntegerField()
+    plays = models.PositiveIntegerField()
+    stalls = models.PositiveIntegerField()
+
+    class Meta:
+        db_table = "live_metrics"
+
+    def __str__(self):
+        return str(self.minute)
+
+
 class DailyPlatformStats(models.Model):
     # Stored rather than summed: a viewer of two videos is one unique viewer across the platform.
     date = models.DateField(primary_key=True)

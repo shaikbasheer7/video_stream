@@ -4,6 +4,7 @@ import reducer, {
   browseLoaded,
   browseMoreLoaded,
   browseMoreRequested,
+  liveLoaded,
   myVideosLoaded,
   myVideosMoreLoaded,
   searchFailed,
@@ -14,9 +15,28 @@ import reducer, {
   videoDeleted,
   videoLoaded,
   videoRequested,
+  videoViewersLoaded,
+  videoViewersRequested,
 } from './videosSlice';
 
 const video = (id: string, resume: number | null | undefined) => ({ id, resume_position_sec: resume }) as Video;
+
+describe('videosSlice live numbers', () => {
+  it("never shows one video's viewer count on another", () => {
+    let state = reducer(undefined, videoViewersLoaded({ videoId: 'a', viewers: 4 }));
+    state = reducer(state, videoViewersRequested('a'));
+    expect(state.videoViewers?.viewers).toBe(4);
+    state = reducer(state, videoViewersRequested('b'));
+    expect(state.videoViewers).toBeNull();
+  });
+
+  it('goes back to showing nothing when the stream stops', () => {
+    let state = reducer(undefined, liveLoaded({ viewersNow: 3, trending: [] }));
+    expect(state.live?.viewersNow).toBe(3);
+    state = reducer(state, liveLoaded(null));
+    expect(state.live).toBeNull();
+  });
+});
 
 describe('videosSlice pagination', () => {
   const dated = (id: string, created_at: string) => ({ id, created_at }) as Video;

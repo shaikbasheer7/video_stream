@@ -13,7 +13,13 @@ from psycopg import sql
 
 logger = logging.getLogger(__name__)
 
-TABLES = ["daily_video_stats", "daily_video_retention", "daily_streaming_quality", "daily_platform_stats"]
+TABLES = [
+    "daily_video_stats",
+    "daily_video_retention",
+    "daily_streaming_quality",
+    "daily_platform_stats",
+    "live_metrics",
+]
 VIEWS = ["analytics_video_stats", "analytics_video_retention"]
 # Written only by the pipeline. Superset doesn't get these: per-user recommendations aren't BI data.
 RECOMMENDATION_TABLES = ["video_embeddings", "ranked_videos", "similar_videos", "recommendations"]

@@ -30,15 +30,19 @@ def find_problems(raw_sessions, platform, video_totals, retention_over_views, ba
     return problems
 
 
+def _raw_sessions(day):
+    """Distinct sessions in whatever the day was aggregated from. A session is unique to its video."""
+    if io.uses_spark():
+        from . import lake
+
+        return lake.read_partition(day).select("video_id", "session_id").distinct().count()
+    start, end = io.day_bounds(day)
+    return len(io.mongo_collection().distinct("session_id", {"received_at": {"$gte": start, "$lt": end}}))
+
+
 def check_day(day):
     """Raises DataQualityError (failing the Airflow task) if anything doesn't add up. Returns a summary."""
-    start, end = io.day_bounds(day)
-    raw_sessions = len(
-        io.mongo_collection().distinct(
-            "session_id",
-            {"received_at": {"$gte": start, "$lt": end}},
-        )
-    )
+    raw_sessions = _raw_sessions(day)
     with io.postgres() as conn:
         platform = conn.execute(
             "SELECT views, sessions, watch_time_sec FROM daily_platform_stats WHERE date = %s", (day,)

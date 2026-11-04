@@ -31,13 +31,13 @@ log_format json escape=json '{"ts":"$time_iso8601","service":"nginx","request_id
     '"ip":"$remote_addr","user_agent":"$http_user_agent"}';
 access_log /var/log/nginx/access.log json;
 
-upstream django {
-    server django:8000;
-}
-
 server {
     listen 80;
     server_name _;
+    # Docker's DNS. nginx would otherwise look a container's address up once, at start, and keep calling the old one
+    # after that container is replaced. This only applies where proxy_pass uses a variable.
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    set $django_upstream http://django:8000;
     client_max_body_size 10m;  # video bytes go straight to S3, never through here
     server_tokens off;
 

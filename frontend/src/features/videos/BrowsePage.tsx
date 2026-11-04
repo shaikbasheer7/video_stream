@@ -3,17 +3,25 @@ import { Link } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../app/store';
 import LoadMore from './LoadMore';
 import VideoGrid from './VideoGrid';
-import { browseMoreRequested, browseRequested, recommendationsRequested } from './videosSlice';
+import { browseMoreRequested, browseRequested, liveRequested, recommendationsRequested } from './videosSlice';
+
+const LIVE_REFRESH_MS = 30_000;
 
 export default function BrowsePage() {
   const dispatch = useAppDispatch();
-  const { browse, browseHasMore, browseLoading, error, loadingMore, recommended, recommendedSource, trending } =
+  const { browse, browseHasMore, browseLoading, error, live, loadingMore, recommended, recommendedSource, trending } =
     useAppSelector((s) => s.videos);
   const authStatus = useAppSelector((s) => s.auth.status);
   const authSettled = authStatus === 'authenticated' || authStatus === 'anonymous';
 
   useEffect(() => {
     dispatch(browseRequested());
+  }, [dispatch]);
+
+  useEffect(() => {
+    dispatch(liveRequested());
+    const timer = setInterval(() => dispatch(liveRequested()), LIVE_REFRESH_MS);
+    return () => clearInterval(timer);
   }, [dispatch]);
 
   // After login state settles: only then does the request carry who's asking.
@@ -23,6 +31,18 @@ export default function BrowsePage() {
 
   return (
     <div className="browse">
+      {live && live.viewersNow > 0 && (
+        <p className="live-count">
+          <span className="live-dot" aria-hidden="true" />
+          {live.viewersNow} watching now
+        </p>
+      )}
+      {live && live.trending.length > 0 && (
+        <section>
+          <h2>Trending in the last hour</h2>
+          <VideoGrid videos={live.trending} />
+        </section>
+      )}
       {recommendedSource === 'personalized' && recommended.length > 0 && (
         <section>
           <h2>Recommended for you</h2>

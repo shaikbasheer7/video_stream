@@ -14,4 +14,5 @@ urlpatterns = [
     path("api/", include("social.urls")),
     path("api/", include("recommendations.urls")),
     path("api/", include("intelligence.urls")),
+    path("api/", include("live.urls")),
 ]

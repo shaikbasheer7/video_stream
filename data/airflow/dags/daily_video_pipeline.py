@@ -9,6 +9,8 @@ from datetime import UTC, date, datetime, timedelta
 
 from airflow.sdk import dag, get_current_context, task
 
+from pipeline.alerts import on_task_failure
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,7 +29,7 @@ def target_day():
     start_date=datetime(2026, 1, 1, tzinfo=UTC),
     catchup=False,  # backfill deliberately (python -m pipeline.run --from ... --to ...)
     max_active_runs=1,
-    default_args={"retries": 2, "retry_delay": timedelta(minutes=5)},
+    default_args={"retries": 2, "retry_delay": timedelta(minutes=5), "on_failure_callback": on_task_failure},
     doc_md=__doc__,
     tags=["analytics"],
 )
@@ -43,8 +45,15 @@ def daily_video_pipeline():
         return count
 
     @task
+    def build_lake_partition():
+        """With ANALYTICS_ENGINE=spark: landing files to Parquet, checked against MongoDB. Otherwise does nothing."""
+        from pipeline.run import build_lake_partition as build
+
+        return build(target_day())
+
+    @task
     def aggregate_and_load_stats():
-        """pandas aggregation, then one Postgres transaction replacing the day."""
+        """pandas or PySpark aggregation, then one Postgres transaction replacing the day."""
         from pipeline.run import aggregate_and_load
 
         return aggregate_and_load(target_day())
@@ -85,6 +94,7 @@ def daily_video_pipeline():
     # Recommendations build on the stats, so a failed quality check stops them: yesterday's lists stay up.
     (
         check_new_events()
+        >> build_lake_partition()
         >> aggregate_and_load_stats()
         >> data_quality_checks()
         >> refresh_trending()

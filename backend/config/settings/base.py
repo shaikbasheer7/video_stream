@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     "analytics",
     "recommendations",
     "intelligence",
+    "live",
 ]
 
 MIDDLEWARE = [
@@ -180,6 +181,9 @@ COUNTRY_DB_PATH = os.environ.get("COUNTRY_DB_PATH", "/opt/geo/dbip-country.mmdb"
 ANALYTICS_ETL_PASSWORD = os.environ.get("ANALYTICS_ETL_PASSWORD", "")
 ANALYTICS_RO_PASSWORD = os.environ.get("ANALYTICS_RO_PASSWORD", "")
 ML_WORKER_DB_PASSWORD = os.environ.get("ML_WORKER_DB_PASSWORD", "")
+LAKE_SINK_ENABLED = env_bool("LAKE_SINK_ENABLED")
+# Live metrics written by Spark (data/pipeline/live.py). Empty, or Redis being away, just means no live numbers.
+REDIS_URL = os.environ.get("REDIS_URL", "")
 
 KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:29092")
 KAFKA_SECURITY_PROTOCOL = os.environ.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")  # SSL on AWS MSK

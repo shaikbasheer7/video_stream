@@ -113,6 +113,23 @@ def test_a_session_is_attributed_to_the_account_even_if_some_events_were_anonymo
     assert row(aggregate_day(frame(rows, other), {A: 100.0}).video_stats, A)["unique_viewers"] == 1
 
 
+def test_watch_time_is_kept_when_the_player_has_not_reported_a_quality_yet():
+    rows = session(A, "s1", [("play", 0, {}), ("progress", 10, {}), ("progress", 20, {})])
+    for row_ in rows[:2]:
+        row_["quality"] = float("nan")  # how pandas shows a field MongoDB doesn't have
+    day = aggregate_day(pd.DataFrame(rows), {A: 100.0})
+    assert day.quality["watch_time_sec"].sum() == day.video_stats["watch_time_sec"].sum() == 20
+
+
+def test_events_in_the_same_millisecond_give_one_answer_whatever_order_they_arrive_in():
+    rows = session(A, "s1", [("play", 0, {}), ("progress", 3, {})])
+    rows[1]["client_ts"] = rows[0]["client_ts"]
+    forwards = aggregate_day(pd.DataFrame(rows), {A: 100.0}).platform
+    backwards = aggregate_day(pd.DataFrame(rows[::-1]), {A: 100.0}).platform
+    assert forwards == backwards
+    assert forwards["watch_time_sec"] == 3
+
+
 def test_empty_day_is_all_zeros_with_uploads():
     day = aggregate_day(pd.DataFrame(), {}, new_uploads=2)
     assert day.video_stats.empty and day.retention.empty and day.quality.empty

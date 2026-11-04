@@ -144,6 +144,8 @@ select {
 .similar { margin-top: 24px; }
 
 .watch-meta { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.live-count { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--muted); font-weight: 600; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: #d92d20; }
 .site-footer { text-align: center; padding: 0 16px 24px; }
 .site-footer a { color: inherit; }
 .load-more { display: flex; justify-content: center; margin-top: 24px; }

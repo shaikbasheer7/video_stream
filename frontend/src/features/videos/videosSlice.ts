@@ -35,6 +35,9 @@ export interface VideosState {
   currentError: string | null;
   error: string | null;
   search: { query: string; results: Video[]; loading: boolean; error: string | null };
+  // Null until known, or when the live stream (optional) isn't running: the page then shows nothing about it.
+  live: { viewersNow: number; trending: Video[] } | null;
+  videoViewers: { videoId: string; viewers: number } | null;
 }
 
 const initialState: VideosState = {
@@ -58,6 +61,8 @@ const initialState: VideosState = {
   currentError: null,
   error: null,
   search: { query: '', results: [], loading: false, error: null },
+  live: null,
+  videoViewers: null,
 };
 
 const videosSlice = createSlice({
@@ -98,6 +103,16 @@ const videosSlice = createSlice({
     },
     similarLoaded(state, action: PayloadAction<VideosState['similar']>) {
       state.similar = action.payload;
+    },
+    liveRequested() {},
+    liveLoaded(state, action: PayloadAction<VideosState['live']>) {
+      state.live = action.payload;
+    },
+    videoViewersRequested(state, action: PayloadAction<string>) {
+      if (state.videoViewers?.videoId !== action.payload) state.videoViewers = null;
+    },
+    videoViewersLoaded(state, action: PayloadAction<VideosState['videoViewers']>) {
+      state.videoViewers = action.payload;
     },
     searchRequested(state, action: PayloadAction<string>) {
       // Never shows the results of the previous words under the new ones.
@@ -199,6 +214,10 @@ export const {
   recommendationsLoaded,
   similarRequested,
   similarLoaded,
+  liveRequested,
+  liveLoaded,
+  videoViewersRequested,
+  videoViewersLoaded,
   searchRequested,
   searchLoaded,
   searchFailed,

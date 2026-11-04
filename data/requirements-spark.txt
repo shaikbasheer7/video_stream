@@ -1,0 +1,4 @@
+# The big data stack (Compose profile `bigdata`): PySpark jobs and live metrics. Needs Java 17.
+pyspark==4.0.5
+pyarrow==21.0.0
+redis==6.4.0

@@ -40,7 +40,8 @@ class SessionSummary:
 
 
 def _quality(event, fallback="unknown"):
-    return event.get("quality") or fallback
+    value = event.get("quality")
+    return value if isinstance(value, str) and value else fallback  # a pandas row has NaN for a missing quality
 
 
 def _number(event, key):

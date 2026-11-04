@@ -124,6 +124,15 @@ DATASETS = {
             metric("quality_switches", "SUM(quality_changes)", "Quality switches", ",d"),
         ],
     },
+    "live_metrics": {
+        "time_column": "minute",
+        "columns": {"minute": "TIMESTAMP", "active_viewers": "INTEGER", "plays": "INTEGER", "stalls": "INTEGER"},
+        "metrics": [
+            metric("active_viewers", "MAX(active_viewers)", "People watching", ",d"),
+            metric("plays", "SUM(plays)", "Plays", ",d"),
+            metric("stalls", "SUM(stalls)", "Stalls", ",d"),
+        ],
+    },
 }
 
 # ---------- Charts ----------
@@ -191,6 +200,8 @@ def pie(dataset, name, groupby, metric_name):
 
 LINE, BAR, AREA = "echarts_timeseries_line", "echarts_timeseries_bar", "echarts_area"
 P, V, R, Q = "daily_platform_stats", "analytics_video_stats", "analytics_video_retention", "daily_streaming_quality"
+L = "live_metrics"
+PER_MINUTE = {"time_grain_sqla": "PT1M", "show_legend": False}
 
 DASHBOARDS = {
     "platform-overview": {
@@ -267,6 +278,19 @@ DASHBOARDS = {
             [series(LINE, Q, "Avg startup time per day", "date", ["avg_startup_ms"])],
         ],
     },
+    "live": {
+        "title": "Live",
+        "filters": [],
+        "default_period": "No filter",  # the table keeps 7 days. Superset's "Last day" means yesterday: no live data
+        "refresh_seconds": 60,
+        "rows": [
+            [
+                series(LINE, L, "People watching", "minute", ["active_viewers"], **PER_MINUTE),
+                series(BAR, L, "Plays per minute", "minute", ["plays"], **PER_MINUTE),
+            ],
+            [series(BAR, L, "Stalls per minute", "minute", ["stalls"], **PER_MINUTE)],
+        ],
+    },
 }
 
 # ---------- Superset's export format ----------
@@ -297,7 +321,7 @@ COLUMN_LABELS = {"title": "Video", "device": "Device", "country": "Country", "qu
 def dataset_yaml(name, spec):
     return {
         "table_name": name,
-        "main_dttm_col": "date",
+        "main_dttm_col": spec.get("time_column", "date"),
         "schema": "public",
         "uuid": uid("dataset", name),
         "database_uuid": uid("database", DATABASE_NAME),
@@ -307,7 +331,7 @@ def dataset_yaml(name, spec):
                 "column_name": column,
                 "verbose_name": COLUMN_LABELS.get(column),
                 "type": kind,
-                "is_dttm": kind == "DATE",
+                "is_dttm": kind in ("DATE", "TIMESTAMP"),
                 "filterable": True,
                 "groupby": True,
             }
@@ -326,7 +350,7 @@ def chart_yaml(dashboard, chart):
     params = {
         "viz_type": chart["viz_type"],
         "datasource": f"{uid('dataset', dataset)}__table",
-        "adhoc_filters": TIME_FILTER,
+        "adhoc_filters": [{**TIME_FILTER[0], "subject": DATASETS[dataset].get("time_column", "date")}],
         **chart["params"],
     }
     return {
@@ -399,6 +423,7 @@ def position_tree(dashboard, spec):
 
 
 def native_filters(dashboard, spec):
+    period = spec.get("default_period", "Last 30 days")
     filters = [
         {
             "id": "NATIVE_FILTER-time",
@@ -407,8 +432,8 @@ def native_filters(dashboard, spec):
             "targets": [{}],
             "controlValues": {},
             "defaultDataMask": {
-                "extraFormData": {"time_range": "Last 30 days"},
-                "filterState": {"value": "Last 30 days"},
+                "extraFormData": {"time_range": period},
+                "filterState": {"value": period},
             },
             "cascadeParentIds": [],
             "scope": {"rootPath": ["ROOT_ID"], "excluded": []},
@@ -443,7 +468,7 @@ def dashboard_yaml(slug, spec):
         "metadata": {
             "native_filter_configuration": native_filters(slug, spec),
             "color_scheme": "supersetColors",
-            "refresh_frequency": 0,
+            "refresh_frequency": spec.get("refresh_seconds", 0),
             "timed_refresh_immune_slices": [],
         },
         "published": True,

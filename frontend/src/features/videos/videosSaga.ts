@@ -8,6 +8,10 @@ import {
   browseMoreLoaded,
   browseMoreRequested,
   browseRequested,
+  liveLoaded,
+  liveRequested,
+  videoViewersLoaded,
+  videoViewersRequested,
   myVideosMoreLoaded,
   myVideosMoreRequested,
   recommendationsLoaded,
@@ -87,6 +91,29 @@ function* fetchSimilar(action: PayloadAction<string>) {
   }
 }
 
+// Live numbers are extras too, and the stream behind them is optional: on any failure the page goes without.
+function* fetchLive() {
+  try {
+    const { data }: { data: { available: boolean; viewers_now: number; trending: Video[] } } = yield call(
+      api.get,
+      '/live/',
+    );
+    yield put(liveLoaded(data.available ? { viewersNow: data.viewers_now, trending: data.trending } : null));
+  } catch {
+    yield put(liveLoaded(null));
+  }
+}
+
+function* fetchVideoViewers(action: PayloadAction<string>) {
+  const videoId = action.payload;
+  try {
+    const { data }: { data: { available: boolean; viewers: number } } = yield call(api.get, `/videos/${videoId}/live/`);
+    yield put(videoViewersLoaded(data.available ? { videoId, viewers: data.viewers } : null));
+  } catch {
+    yield put(videoViewersLoaded(null));
+  }
+}
+
 function* fetchSearch(action: PayloadAction<string>) {
   try {
     const { data }: { data: { results: Video[] } } = yield call(api.get, '/search/', { params: { q: action.payload } });
@@ -163,6 +190,8 @@ export default function* videosSaga() {
   yield takeLatest(recommendationsRequested.type, fetchRecommendations);
   yield takeLatest(similarRequested.type, fetchSimilar);
   yield takeLatest(searchRequested.type, fetchSearch);
+  yield takeLatest(liveRequested.type, fetchLive);
+  yield takeLatest(videoViewersRequested.type, fetchVideoViewers);
   yield takeLatest(feedRequested.type, fetchFeed);
   yield takeLatest(followRequested.type, changeFollow);
   yield takeLatest(myVideosRequested.type, fetchMyVideos);

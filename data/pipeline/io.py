@@ -8,6 +8,11 @@ import psycopg
 from pymongo import MongoClient
 
 
+def uses_spark():
+    """pandas from MongoDB is the default; spark reads the data lake (Compose profile `bigdata`)."""
+    return os.environ.get("ANALYTICS_ENGINE", "pandas") == "spark"
+
+
 def mongo_collection():
     client = MongoClient(os.environ["MONGO_URL"], serverSelectionTimeoutMS=10_000, tz_aware=True)
     return client[os.environ.get("MONGO_DB", "streaming")].playback_events

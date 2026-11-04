@@ -7,6 +7,7 @@ x-backend-env-vars: &backend-env-vars
   S3_ENDPOINT_URL: http://s3:8333
   S3_ADDRESSING_STYLE: path
   CLOUDFRONT_KEY_PAIR_ID: LOCALDEVKEY
+  LAKE_SINK_ENABLED: ${LAKE_SINK_ENABLED:-}
   MONGO_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
 
 # Kafka subscribers: same backend image, `manage.py run_consumer <name>`.
@@ -186,6 +187,12 @@ services:
       ANALYTICS_DB_URL: postgresql://analytics_etl:${ANALYTICS_ETL_PASSWORD}@postgres:5432/${POSTGRES_DB}
       MONGO_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
       MONGO_DB: ${MONGO_DB}
+      ANALYTICS_ENGINE: ${ANALYTICS_ENGINE:-pandas}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      S3_ENDPOINT_URL: http://s3:8333
+      S3_BUCKET: ${S3_BUCKET}
     ports:
       - "127.0.0.1:8081:8080"
     depends_on:
@@ -217,6 +224,81 @@ services:
       django:
         condition: service_healthy
 
+  # ---------- Big data stack (optional, very heavy): docker compose --profile data --profile bigdata up -d ----------
+  # Set ANALYTICS_ENGINE=spark and LAKE_SINK_ENABLED=1 in .env to use it. See "Big data" in the README.
+
+  # events.playback -> raw JSON in S3 under lake-landing/, by date. Spark turns those into Parquet each night.
+  connect:
+    profiles: [bigdata]
+    build: ./infra/connect
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
+      CONNECT_GROUP_ID: lake-connect
+      CONNECT_REST_ADVERTISED_HOST_NAME: connect
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx768m
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: us-east-1
+      S3_ENDPOINT_URL: http://s3:8333
+      S3_BUCKET: ${S3_BUCKET}
+    depends_on:
+      django:
+        condition: service_healthy # the topic and bucket exist
+    deploy:
+      resources:
+        limits:
+          memory: 1200m
+
+  # What the API serves as live numbers. Disposable: Spark rewrites it within seconds.
+  redis:
+    profiles: [bigdata]
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Spark Structured Streaming: events.playback -> live viewers and trending in Redis, per-minute rows in Postgres.
+  spark-live:
+    profiles: [bigdata]
+    build:
+      context: ./data
+      dockerfile: airflow/Dockerfile
+    entrypoint: ["python", "-m", "pipeline.live"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      REDIS_URL: redis://redis:6379/0
+      ANALYTICS_DB_URL: postgresql://analytics_etl:${ANALYTICS_ETL_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      SPARK_DRIVER_MEMORY: 1g
+    volumes:
+      - spark-checkpoints:/opt/spark-checkpoints
+    depends_on:
+      django:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, sys, time; sys.exit(time.time() - os.path.getmtime('/tmp/heartbeat') > 90)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -232,6 +314,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+      start_period: 15m  # crash recovery after an unclean stop can take minutes on a slow disk
 
   mongo:
     image: mongo:7
@@ -307,3 +390,4 @@ volumes:
   postgres-data:
   kafka-data:
   s3-data:
+  spark-checkpoints:

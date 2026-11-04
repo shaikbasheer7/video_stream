@@ -3,14 +3,16 @@ import { Link, useParams } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../app/store';
 import { formatDuration, searchPath } from '../videos/format';
 import VideoGrid from '../videos/VideoGrid';
-import { followRequested, similarRequested, videoRequested } from '../videos/videosSlice';
+import { followRequested, similarRequested, videoRequested, videoViewersRequested } from '../videos/videosSlice';
 import HlsPlayer from './HlsPlayer';
 import QualityMenu from './QualityMenu';
+
+const LIVE_REFRESH_MS = 30_000;
 
 export default function PlayerPage() {
   const { id = '' } = useParams();
   const dispatch = useAppDispatch();
-  const { current: video, currentLoading, currentError, similar } = useAppSelector((s) => s.videos);
+  const { current: video, currentLoading, currentError, similar, videoViewers } = useAppSelector((s) => s.videos);
   const authStatus = useAppSelector((s) => s.auth.status);
   const loggedIn = authStatus === 'authenticated';
   const authSettled = authStatus === 'authenticated' || authStatus === 'anonymous';
@@ -27,6 +29,12 @@ export default function PlayerPage() {
 
   useEffect(() => {
     dispatch(similarRequested(id));
+  }, [dispatch, id]);
+
+  useEffect(() => {
+    dispatch(videoViewersRequested(id));
+    const timer = setInterval(() => dispatch(videoViewersRequested(id)), LIVE_REFRESH_MS);
+    return () => clearInterval(timer);
   }, [dispatch, id]);
 
   if (currentError) {
@@ -88,6 +96,7 @@ export default function PlayerPage() {
         <p className="muted small">
           {video.owner} · {new Date(video.created_at).toLocaleDateString()}
           {video.duration_sec != null && ` · ${formatDuration(video.duration_sec)}`}
+          {videoViewers?.videoId === id && videoViewers.viewers > 0 && ` · ${videoViewers.viewers} watching now`}
         </p>
         {loggedIn && !video.is_owner && video.is_following !== undefined && (
           <button

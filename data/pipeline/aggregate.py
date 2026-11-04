@@ -31,58 +31,71 @@ def _first_or_unknown(group, column):
     return str(values.iloc[0]) if len(values) else "unknown"
 
 
-def _build_sessions(events, durations):
-    rows, retention_rows, quality_rows = [], [], []
-    for (video_id, session_id), group in events.sort_values("client_ts").groupby(
-        ["video_id", "session_id"], sort=False
-    ):
-        summary = summarize_session(group.to_dict("records"))
-        duration = durations.get(video_id)
-        completion = None
-        if summary.played and duration:
-            completion = min(100.0, covered_seconds(summary.segments) / duration * 100)
-            for index in retention_slices(summary.segments, duration, RETENTION_SLICES):
-                retention_rows.append(
-                    {"video_id": video_id, "position_pct": index * SLICE_PCT, "session_id": session_id}
-                )
+def in_session_order(events):
+    """Oldest first. Events can share a millisecond: without a tie-break, the same data could give different results."""
+    keys = [column for column in ("client_ts", "position_sec", "_id", "event_id") if column in events]
+    return events.sort_values(keys, kind="stable")
 
-        rows.append(
+
+def session_detail(video_id, session_id, group, duration):
+    """One session's events, oldest first -> (session row, retention slice indexes, quality rows).
+
+    Shared with the Spark job (lake.py), so both engines count a session the same way.
+    """
+    summary = summarize_session(group.to_dict("records"))
+    completion, slices = None, []
+    if summary.played and duration:
+        completion = min(100.0, covered_seconds(summary.segments) / duration * 100)
+        slices = sorted(retention_slices(summary.segments, duration, RETENTION_SLICES))
+
+    session = {
+        "video_id": video_id,
+        "session_id": session_id,
+        "viewer": _viewer_id(group),
+        "played": summary.played,
+        "completed": summary.completed,
+        "completion_pct": completion,
+        "watch_time_sec": summary.watch_time_sec,
+        "buffering_events": summary.buffering_events,
+        "buffering_ms": summary.buffering_ms,
+    }
+
+    # Quality view: seconds go to the rendition that played them; a session's stalls and switches go to the
+    # rendition it mostly watched (or its last known one if it watched nothing).
+    device, country = _first_or_unknown(group, "device"), _first_or_unknown(group, "country")
+    seconds_by_quality = {}
+    for segment in summary.segments:
+        seconds_by_quality[segment.quality] = seconds_by_quality.get(segment.quality, 0.0) + segment.seconds
+    main = max(seconds_by_quality, key=seconds_by_quality.get) if seconds_by_quality else _last_quality(group)
+    quality_rows = []
+    for quality in set(seconds_by_quality) | {main}:
+        is_main = quality == main
+        quality_rows.append(
             {
-                "video_id": video_id,
+                "device": device,
+                "country": country,
+                "quality": quality,
                 "session_id": session_id,
-                "viewer": _viewer_id(group),
-                "played": summary.played,
-                "completed": summary.completed,
-                "completion_pct": completion,
-                "watch_time_sec": summary.watch_time_sec,
-                "buffering_events": summary.buffering_events,
-                "buffering_ms": summary.buffering_ms,
+                "watch_time_sec": seconds_by_quality.get(quality, 0.0),
+                "buffering_events": summary.buffering_events if is_main else 0,
+                "buffering_ms": summary.buffering_ms if is_main else 0,
+                "startup_events": summary.startup_events if is_main else 0,
+                "startup_ms": summary.startup_ms if is_main else 0,
+                "quality_changes": summary.quality_changes if is_main else 0,
             }
         )
+    return session, slices, quality_rows
 
-        # Quality view: seconds go to the rendition that played them; a session's stalls and switches go to the
-        # rendition it mostly watched (or its last known one if it watched nothing).
-        device, country = _first_or_unknown(group, "device"), _first_or_unknown(group, "country")
-        seconds_by_quality = {}
-        for segment in summary.segments:
-            seconds_by_quality[segment.quality] = seconds_by_quality.get(segment.quality, 0.0) + segment.seconds
-        main = max(seconds_by_quality, key=seconds_by_quality.get) if seconds_by_quality else _last_quality(group)
-        for quality in set(seconds_by_quality) | {main}:
-            is_main = quality == main
-            quality_rows.append(
-                {
-                    "device": device,
-                    "country": country,
-                    "quality": quality,
-                    "session_id": session_id,
-                    "watch_time_sec": seconds_by_quality.get(quality, 0.0),
-                    "buffering_events": summary.buffering_events if is_main else 0,
-                    "buffering_ms": summary.buffering_ms if is_main else 0,
-                    "startup_events": summary.startup_events if is_main else 0,
-                    "startup_ms": summary.startup_ms if is_main else 0,
-                    "quality_changes": summary.quality_changes if is_main else 0,
-                }
-            )
+
+def _build_sessions(events, durations):
+    rows, retention_rows, quality_rows = [], [], []
+    for (video_id, session_id), group in in_session_order(events).groupby(["video_id", "session_id"], sort=False):
+        session, slices, session_quality = session_detail(video_id, session_id, group, durations.get(video_id))
+        rows.append(session)
+        retention_rows += [
+            {"video_id": video_id, "position_pct": index * SLICE_PCT, "session_id": session_id} for index in slices
+        ]
+        quality_rows += session_quality
     return pd.DataFrame(rows), pd.DataFrame(retention_rows), pd.DataFrame(quality_rows)
 
 

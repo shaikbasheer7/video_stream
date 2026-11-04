@@ -23,6 +23,9 @@ Built phase by phase from the *Video Streaming Platform – MVP Blueprint*.
 - **Phase 9 (video intelligence), done locally:** an optional ML worker writes Whisper subtitles and CLIP tags,
   moderation flags and a better thumbnail, and search covers titles, tags and speech.
   See [Video intelligence](#video-intelligence).
+- **Phase 10 (big data and real time), done locally, optional:** Kafka Connect to a date-partitioned data lake, PySpark
+  aggregation, data quality alerts, and live viewers and trending. See [Big data](#big-data) and the
+  [cost and scaling review](docs/scaling-review.md).
 
 ## Quick start
 
@@ -326,6 +329,62 @@ On first start it works through every `video.ready` still on Kafka, so existing 
 - **Similar videos:** the 0.2 cutoff was measured on titles, not on text that includes speech, so it needs measuring
   again once there are real videos with speech.
 
+## Big data
+
+Optional, and heavy: the whole stack uses about 5.5 GB of memory. The blueprint says to add this when data outgrows pandas
+and PostgreSQL or the product needs live numbers, so the site works the same without it.
+
+```
+Player -> Django -> Kafka -> Connect -> lake-landing/events.playback/date=.../*.json.gz   raw, as it arrived
+                      |                     |  every night, in Airflow
+                      |                     v
+                      |                 lake/events/date=.../*.parquet -> PySpark -> the daily analytics tables
+                      v
+                 Spark streaming -> Redis (live numbers on the site) + live_metrics (Live dashboard)
+```
+
+To turn it on, set these in `.env` and start the profile:
+
+```sh
+# ANALYTICS_ENGINE=spark
+# LAKE_SINK_ENABLED=1
+# REDIS_URL=redis://redis:6379/0
+docker compose --profile data --profile bigdata up -d --build
+
+# Put what MongoDB already holds into the lake, before the nightly job needs it:
+docker compose --profile data exec airflow python -m pipeline.lake --from 2026-10-01 --to 2026-11-30
+```
+
+Without `ANALYTICS_ENGINE=spark`, the nightly job keeps using pandas and MongoDB. Backfill first, or the data quality
+check stops the job because the lake is behind.
+
+- **Lake:** each night `build_partition` merges a day's landing files into typed, deduplicated Parquet. Re-running is
+  safe, and it adds to what a backfill already put there.
+- **Same answers:** the Spark job shares its per-session logic with the pandas one. Measured on all 17 days of data
+  here (6,296 events, mostly generated demo data), every table came out the same. CI repeats this on a small sample.
+- **Data quality:** the pipeline stops if a day's tables disagree, if lake rows lack an event, video or session ID, or
+  if the lake has over 1% fewer events than MongoDB. That last check also catches Kafka Connect falling behind.
+- **Alerts:** any failed task is logged as an error, and posted to `ALERT_WEBHOOK_URL` if you set one (Slack and Discord
+  incoming webhooks accept this format). Only the message format and failure handling are tested, not a real webhook.
+- **Live numbers:** `GET /api/live/` and `GET /api/videos/{id}/live/`, shown as "watching now" and "Trending in the last
+  hour". Redis keys expire, so if the stream stops the site shows nothing rather than old numbers. "Watching now" counts
+  sessions with an event in the current minute, using an estimate that can be slightly off at large numbers.
+- **Live dashboard:** the Spark stream keeps one row a minute in `live_metrics` for 7 days, and Superset's **Live**
+  dashboard refreshes every minute. Superset's own range names can mislead: "Last day" means yesterday.
+- **Monitoring:** with `LAKE_SINK_ENABLED=1`, the monitor also reports Kafka Connect's lag.
+
+**Known limits:**
+
+- **One machine:** Spark runs inside the Airflow and `spark-live` containers (`local[2]`), so this shows how the jobs
+  work, not how they perform on a cluster. Setting `SPARK_MASTER` is the first step towards one, and the code would also
+  need shipping to the workers.
+- **Not on AWS:** there's no Terraform for any of this yet, nor for Airflow and Superset.
+- **Landing files aren't removed,** so they keep using storage after they become Parquet.
+- **Test data:** the live numbers were tested with simulated viewers through the real API, not real traffic.
+- **Large images:** about 6 GB for Airflow and `spark-live`, and 3.7 GB for Kafka Connect.
+- **Licence:** Confluent's S3 connector and image use the Confluent Community License, which is free to use but not open
+  source. Check it against your plans.
+
 ## Operations
 
 - **Logs:** every service writes one JSON object per line (`LOG_FORMAT=text` for readable local output),
@@ -432,10 +491,18 @@ Vitest, then builds and scans every Docker image.
   containers, the silent token refresh in the axios interceptor rather than `authSaga` (same single-refresh lock), and
   `VideoGrid` instead of `VideoCard`. Behaviour is the same.
 
+- **Spark Structured Streaming instead of Flink (step 59):** the blueprint allows either, and advises against running two
+  clusters until real-time features are central to the product.
+- **Spark writes the Parquet, not Kafka Connect (step 56):** the S3 connector's Parquet output needs a schema, which
+  these plain JSON events don't carry, and the tool for adding one wouldn't load on this Connect version. So Connect
+  writes date-partitioned JSON and the nightly Spark job turns it into Parquet: same lake layout, but Parquet only
+  appears once a day.
+- **pandas stays the default engine:** following the blueprint's rollout, Spark only runs if you turn it on.
+
 **Not built yet:**
 
 - **Comments:** the data model lists a MongoDB `comments` collection, but no endpoint, page or checklist step covers it.
-- **Jupyter container (section 12.3)** and **the rest of Phase 10**.
+- **Jupyter container (section 12.3)**.
 - **Monitoring:** lag, DLQ, 5xx and health alarms exist. Encoding duration is only in the logs, and API latency, encoding
   failure rate and CloudFront cache hit ratio have no dashboard or alarm.
 
@@ -463,4 +530,5 @@ Checks that run without AWS: `sh infra/terraform/check.sh` (fmt + validate), Tri
 
 - **Apply Part B to a real AWS account:** needs your go-ahead and credentials. It costs money (see the
   runbook).
-- **Phase 10:** big data and real time (Kafka Connect to an S3 Parquet lake, PySpark jobs, Flink metrics).
+- **Real use:** try it with real videos and viewers. The [cost and scaling review](docs/scaling-review.md) lists what to
+  do as usage grows.

@@ -1,6 +1,7 @@
 """Run the pipeline without Airflow, e.g. to backfill:  python -m pipeline.run --from 2026-10-01 --to 2026-10-31
 
 --recommendations also refreshes trending, similar videos and personal picks as of the last day.
+ANALYTICS_ENGINE chooses how days are aggregated: pandas from MongoDB (the default), or spark from the data lake.
 """
 
 import argparse
@@ -15,10 +16,28 @@ logger = logging.getLogger(__name__)
 
 def aggregate_and_load(day):
     durations, uploads = io.read_video_metadata(day)
-    agg = aggregate_day(io.read_events(day), durations, new_uploads=uploads)
+    if io.uses_spark():
+        from . import lake  # needs Java and PySpark
+
+        agg = lake.aggregate_day_spark(lake.read_partition(day), durations, new_uploads=uploads)
+    else:
+        agg = aggregate_day(io.read_events(day), durations, new_uploads=uploads)
     io.load_day(day, agg)
     logger.info("%s: %s", day, agg.platform)
     return agg.platform
+
+
+def build_lake_partition(day):
+    """Spark engine only: turn the day's landing files into Parquet and check them against MongoDB."""
+    if not io.uses_spark():
+        return {"skipped": "ANALYTICS_ENGINE is not spark"}
+    from . import lake
+
+    count = lake.build_partition(day)
+    problems = lake.check_partition(day)
+    if problems:
+        raise quality.DataQualityError(f"{day}: " + "; ".join(problems))
+    return {"events": count}
 
 
 def main():
@@ -32,6 +51,7 @@ def main():
 
     day, end = args.start, args.end or args.start
     while day <= end:
+        build_lake_partition(day)
         aggregate_and_load(day)
         quality.check_day(day)
         day += timedelta(days=1)
