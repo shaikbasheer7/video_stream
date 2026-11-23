@@ -1,4 +1,4 @@
-boto3==1.40.0
-confluent-kafka==2.11.1
-psycopg[binary]==3.2.10
-sentry-sdk==2.19.2
+boto3==1.44.7
+confluent-kafka==2.16.2
+psycopg[binary]==3.3.9
+sentry-sdk==2.75.0
